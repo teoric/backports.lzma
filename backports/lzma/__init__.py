@@ -167,9 +167,9 @@ class LZMAFile(io.BufferedIOBase):
                           "is the file gone? is xz on your PATH?")
             self._seek_offsets = {0: None}
             return
-		# TODO support multiple streams: save stream_offsets
-		stream_descriptions = [line.split("\t") for line in xz_list if line.startswith("stream\t")]
-		assert int(stream_descriptions[0][3]) == 0, "First stream doesn't start at 0?"
+        # TODO support multiple streams: save stream_offsets
+        stream_descriptions = [line.split("\t") for line in xz_list if line.startswith("stream\t")]
+        assert int(stream_descriptions[0][3]) == 0, "First stream doesn't start at 0?"
         STREAM_NUMBER, BLOCK_NUMBER_IN_STREAM, BLOCK_NUMBER_IN_FILE, \
             COMPRESSED_OFFSET, UNCOMPRESSED_OFFSET, \
             COMPRESSED_BLOCK_SIZE, UNCOMPRESSED_BLOCK_SIZE, RATIO, INTEGRITY = range(1, 10)

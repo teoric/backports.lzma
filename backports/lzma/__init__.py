@@ -28,6 +28,9 @@ except ImportError:
     #Python 2
     import __builtin__ as builtins
 import io
+import os.path
+import subprocess
+import warnings
 from ._lzma import *
 from ._lzma import _encode_filter_properties, _decode_filter_properties
 
@@ -131,13 +134,49 @@ class LZMAFile(io.BufferedIOBase):
             if "b" not in mode:
                 mode += "b"
             self._fp = builtins.open(filename, mode)
+            self._filename = os.path.abspath(filename)
+            # offsets in decompressed stream -> offsets in compressed stream
+            self._seek_offsets = None
             self._closefp = True
             self._mode = mode_code
         elif hasattr(filename, "read") or hasattr(filename, "write"):
             self._fp = filename
+            self._seek_offsets = None
+            self._filename = None
             self._mode = mode_code
         else:
             raise TypeError("filename must be a str or bytes object, or a file")
+
+    def seek_offsets(self):
+        """Returns byte offsets it's cheap to seek to"""
+        if not self._seek_offsets:
+            self._get_seek_offsets()
+        return sorted(self._seek_offsets.keys())
+
+    def _get_seek_offsets(self):
+        if not self._filename:
+            raise ValueError("filename must be a str or bytes object, not a file object")
+        try:
+            with open('/dev/null', 'w') as NULL:
+                xz_args = ['--list','--verbose','--robot']
+                xz_raw = subprocess.check_output(['xz'] + xz_args + [self._filename],
+                                                  stderr=NULL)
+                xz_list = xz_raw.split("\n")
+        except:
+            warnings.warn("LZMAFile: can't _get_seek_offsets, is this an xz file? "
+                          "is the file gone? is xz on your PATH?")
+            self._seek_offsets = {0: None}
+            return
+		# TODO support multiple streams: save stream_offsets
+		stream_descriptions = [line.split("\t") for line in xz_list if line.startswith("stream\t")]
+		assert int(stream_descriptions[0][3]) == 0, "First stream doesn't start at 0?"
+        STREAM_NUMBER, BLOCK_NUMBER_IN_STREAM, BLOCK_NUMBER_IN_FILE, \
+            COMPRESSED_OFFSET, UNCOMPRESSED_OFFSET, \
+            COMPRESSED_BLOCK_SIZE, UNCOMPRESSED_BLOCK_SIZE, RATIO, INTEGRITY = range(1, 10)
+        block_descriptions = [line.split("\t") for line in xz_list if line.startswith("block\t")]
+        self._seek_offsets = {int(line[UNCOMPRESSED_OFFSET]): int(line[COMPRESSED_OFFSET]) \
+            for line in block_descriptions if line[STREAM_NUMBER] == '1'}
+        assert self._seek_offsets, ("Couldn't parse xz --list", xz_list)
 
     def close(self):
         """Flush and close the file.
@@ -205,9 +244,15 @@ class LZMAFile(io.BufferedIOBase):
         if not self.readable():
             raise io.UnsupportedOperation("Seeking is only supported "
                                           "on files open for reading")
-        if not self._fp.seekable():
+        if hasattr(self._fp, 'seekable') and not self._fp.seekable():
+            # python 3
             raise io.UnsupportedOperation("The underlying file object "
                                           "does not support seeking")
+        if not hasattr(self._fp, 'seek'):
+            # python 2
+            raise io.UnsupportedOperation("The underlying file object "
+                                          "does not support seeking")
+
 
     # Fill the readahead buffer if it is empty. Returns False on EOF.
     def _fill_buffer(self):
@@ -343,6 +388,30 @@ class LZMAFile(io.BufferedIOBase):
         self._decompressor = LZMADecompressor(**self._init_args)
         self._buffer = None
 
+    def _rewind_to(self, block_begin_point):
+        target_offset = self._seek_offsets[block_begin_point]
+        if target_offset is None:
+            self._rewind()
+            return
+        self._fp.seek(0, 0)
+        self._mode = _MODE_READ
+        self._pos = 0
+        self._decompressor = LZMADecompressor(**self._init_args)
+        self._buffer = None
+        try:
+            # trick the decompressor: read the stream header,
+            # then the block header of the block we want, then the block
+            xz_header = self._fp.read(STREAM_HEADER_SIZE)
+            if len(xz_header) < STREAM_HEADER_SIZE:
+                raise EOFError("Can't find xz header")
+            self._decompressor.decompress(xz_header)
+            self._fp.seek(target_offset, 0)
+            self._pos = block_begin_point
+        except:
+            warnings.warn("LZMAFile: can't _rewind_to, seeking may be "
+                          "very slow")
+            self._rewind()
+
     def seek(self, offset, whence=0):
         """Change the file position.
 
@@ -378,10 +447,14 @@ class LZMAFile(io.BufferedIOBase):
             #This is not needed on Python 3 where the comparison to self._pos
             #will fail with a TypeError.
             raise TypeError("Seek offset should be an integer, not None")
-        if offset < self._pos:
+        if offset < self._pos and self._seek_offsets:
+            # smart rewind
+            block_begin_point = max(x for x in self._seek_offsets if x <= offset)
+            self._rewind_to(block_begin_point)
+        elif offset < self._pos:
+            # plain rewind
             self._rewind()
-        else:
-            offset -= self._pos
+        offset -= self._pos
 
         # Read and discard data until we reach the desired position.
         if self._mode != _MODE_READ_EOF:

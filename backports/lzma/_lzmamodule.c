@@ -1445,6 +1445,7 @@ init_lzma(void)
         ADD_INT_PREFIX_MACRO(m, MF_BT4) == -1 ||
         ADD_INT_PREFIX_MACRO(m, MODE_FAST) == -1 ||
         ADD_INT_PREFIX_MACRO(m, MODE_NORMAL) == -1 ||
+        ADD_INT_PREFIX_MACRO(m, STREAM_HEADER_SIZE) == -1 ||
         ADD_INT_PREFIX_MACRO(m, PRESET_DEFAULT) == -1 ||
         ADD_INT_PREFIX_MACRO(m, PRESET_EXTREME) == -1)
 #if PY_MAJOR_VERSION >= 3

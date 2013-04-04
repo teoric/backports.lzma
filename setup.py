@@ -42,6 +42,8 @@ by Nadeem Vawda and Per Oyvind Karlsen, which provides a Python wrapper for XZ U
 (aka LZMA Utils v2) by Igor Pavlov.
 
 In order to compile this, you will need to install XZ Utils from http://tukaani.org/xz/
+
+(Modified to support seeking between blocks)
 """
 
 if sys.version_info < (2,6):
@@ -52,11 +54,11 @@ setup(
     name = "backports.lzma",
     version = __version__,
     description = descr,
-    author = "Peter Cock, based on work by Nadeem Vawda and Per Oyvind Karlsen",
-    author_email = "p.j.a.cock@googlemail.com",
-    url = "https://github.com/peterjc/backports.lzma",
+    author = "Tomer Chachamu, based on work by Peter Cock",
+    author_email = "tomer.chachamu@gmail.com",
+    url = "https://github.com/r3m0t/backports.lzma",
     license='3-clause BSD License',
-    keywords = "xy lzma compression decompression",
+    keywords = "xy xz lzma compression decompression",
     long_description = long_descr,
     classifiers = [
         'Development Status :: 5 - Production/Stable',

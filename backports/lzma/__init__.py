@@ -133,16 +133,18 @@ class LZMAFile(io.BufferedIOBase):
         if isinstance(filename, (str, bytes)):
             if "b" not in mode:
                 mode += "b"
-            self._fp = builtins.open(filename, mode)
+            self._fp = io.open(filename, mode)
             self._filename = os.path.abspath(filename)
             # offsets in decompressed stream -> offsets in compressed stream
             self._seek_offsets = None
+            self._get_seek_offsets()
             self._closefp = True
             self._mode = mode_code
         elif hasattr(filename, "read") or hasattr(filename, "write"):
             self._fp = filename
             self._seek_offsets = None
             self._filename = None
+            self._dont_read_past = None
             self._mode = mode_code
         else:
             raise TypeError("filename must be a str or bytes object, or a file")
@@ -157,7 +159,7 @@ class LZMAFile(io.BufferedIOBase):
         if not self._filename:
             raise ValueError("filename must be a str or bytes object, not a file object")
         try:
-            with open('/dev/null', 'w') as NULL:
+            with builtins.open(os.devnull, 'w') as NULL:
                 xz_args = ['--list','--verbose','--robot']
                 xz_raw = subprocess.check_output(['xz'] + xz_args + [self._filename],
                                                   stderr=NULL)
@@ -165,7 +167,7 @@ class LZMAFile(io.BufferedIOBase):
         except:
             warnings.warn("LZMAFile: can't _get_seek_offsets, is this an xz file? "
                           "is the file gone? is xz on your PATH?")
-            self._seek_offsets = {0: None}
+            self._seek_offsets = None
             return
         # TODO support multiple streams: save stream_offsets
         stream_descriptions = [line.split("\t") for line in xz_list if line.startswith("stream\t")]
@@ -174,9 +176,12 @@ class LZMAFile(io.BufferedIOBase):
             COMPRESSED_OFFSET, UNCOMPRESSED_OFFSET, \
             COMPRESSED_BLOCK_SIZE, UNCOMPRESSED_BLOCK_SIZE, RATIO, INTEGRITY = range(1, 10)
         block_descriptions = [line.split("\t") for line in xz_list if line.startswith("block\t")]
+        # TODO use bisect module for _seek_offsets
         self._seek_offsets = {int(line[UNCOMPRESSED_OFFSET]): int(line[COMPRESSED_OFFSET]) \
             for line in block_descriptions if line[STREAM_NUMBER] == '1'}
         assert self._seek_offsets, ("Couldn't parse xz --list", xz_list)
+        self._dont_read_past = int(block_descriptions[-1][COMPRESSED_OFFSET]) + int(block_descriptions[-1][COMPRESSED_BLOCK_SIZE])
+        self._size = sum(int(line[UNCOMPRESSED_BLOCK_SIZE]) for line in block_descriptions)
 
     def close(self):
         """Flush and close the file.
@@ -244,15 +249,9 @@ class LZMAFile(io.BufferedIOBase):
         if not self.readable():
             raise io.UnsupportedOperation("Seeking is only supported "
                                           "on files open for reading")
-        if hasattr(self._fp, 'seekable') and not self._fp.seekable():
-            # python 3
+        if not self._fp.seekable():
             raise io.UnsupportedOperation("The underlying file object "
                                           "does not support seeking")
-        if not hasattr(self._fp, 'seek'):
-            # python 2
-            raise io.UnsupportedOperation("The underlying file object "
-                                          "does not support seeking")
-
 
     # Fill the readahead buffer if it is empty. Returns False on EOF.
     def _fill_buffer(self):
@@ -264,11 +263,13 @@ class LZMAFile(io.BufferedIOBase):
 
             if self._decompressor.unused_data:
                 rawblock = self._decompressor.unused_data
+            elif self._dont_read_past:
+                rawblock = self._fp.read(min(_BUFFER_SIZE, self._dont_read_past - self._fp.tell()))
             else:
                 rawblock = self._fp.read(_BUFFER_SIZE)
 
             if not rawblock:
-                if self._decompressor.eof:
+                if self._decompressor.eof or self._fp.tell() == self._dont_read_past:
                     self._mode = _MODE_READ_EOF
                     self._size = self._pos
                     return False

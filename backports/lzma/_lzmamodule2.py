@@ -5,6 +5,41 @@ import collections
 import weakref
 import sys
 
+__all__ = ['CHECK_CRC32',
+ 'CHECK_CRC64',
+ 'CHECK_ID_MAX',
+ 'CHECK_NONE',
+ 'CHECK_SHA256',
+ 'CHECK_UNKNOWN',
+ 'FILTER_ARM',
+ 'FILTER_ARMTHUMB',
+ 'FILTER_DELTA',
+ 'FILTER_IA64',
+ 'FILTER_LZMA1',
+ 'FILTER_LZMA2',
+ 'FILTER_POWERPC',
+ 'FILTER_SPARC',
+ 'FILTER_X86',
+ 'FORMAT_ALONE',
+ 'FORMAT_AUTO',
+ 'FORMAT_RAW',
+ 'FORMAT_XZ',
+ 'LZMACompressor',
+ 'LZMADecompressor',
+ 'LZMAError',
+ 'MF_BT2',
+ 'MF_BT3',
+ 'MF_BT4',
+ 'MF_HC3',
+ 'MF_HC4',
+ 'MODE_FAST',
+ 'MODE_NORMAL',
+ 'PRESET_DEFAULT',
+ 'PRESET_EXTREME',
+ '_decode_filter_properties',
+ '_encode_filter_properties',
+ 'is_check_supported']
+
 _owns = weakref.WeakKeyDictionary()
 
 ffi = FFI()
@@ -196,6 +231,11 @@ class LZMAError(Exception):
     """Call to liblzma failed."""
 
 def is_check_supported(check):
+    """is_check_supported(check_id) -> bool
+    
+    Test whether the given integrity check is supported.
+    
+    Always returns True for CHECK_NONE and CHECK_CRC32."""
     return bool(m.lzma_check_is_supported(check))
 
 def catch_lzma_error(fun, *args):
@@ -207,8 +247,6 @@ def catch_lzma_error(fun, *args):
         return lzret
     elif lzret == m.LZMA_DATA_ERROR:
         raise LZMAError("Corrupt input data")
-    elif lzret == m.LZMA_MEM_ERROR:
-        raise MemoryError
     elif lzret == m.LZMA_UNSUPPORTED_CHECK:
         raise LZMAError("Unsupported integrity check")
     elif lzret == m.LZMA_FORMAT_ERROR:
@@ -219,8 +257,10 @@ def catch_lzma_error(fun, *args):
         raise LZMAError("Insufficient buffer space")
     elif lzret == m.LZMA_PROG_ERROR:
         raise LZMAError("Internal error")
+    elif lzret == m.LZMA_MEM_ERROR:
+        raise MemoryError
     else:
-        raise LZMAError("Unrecognised...", lzret)
+        raise LZMAError("Unrecognised error from liblzma: %d" % lzret)
 
 def parse_filter_spec_delta(id, dist=1):
     ret = ffi.new('lzma_options_delta*')
@@ -277,6 +317,12 @@ def parse_filter_spec(spec):
     return ret
 
 def _encode_filter_properties(filterspec):
+    """_encode_filter_properties(filter) -> bytes
+
+    Return a bytes object encoding the options (properties) of the filter
+    specified by *filter* (a dict).
+
+    The result does not include the filter ID itself, only the options."""
     filter = parse_filter_spec(filterspec)
     size = ffi.new("uint32_t*")
     catch_lzma_error(m.lzma_properties_size, size, filter)
@@ -322,6 +368,10 @@ def build_filter_spec(filter):
     return spec
 
 def _decode_filter_properties(filter_id, encoded_props):
+    """_decode_filter_properties(filter_id, encoded_props) -> dict
+
+    Return a dict describing a filter with ID *filter_id*, and options
+    (properties) decoded from the bytes object *encoded_props*."""
     filter = ffi.new('lzma_filter*')
     filter.id = filter_id
     catch_lzma_error(m.lzma_properties_decode,
@@ -352,6 +402,27 @@ class Allocator(object):
         del self.owns[self._addr(ptr)]
 
 class LZMADecompressor(object):
+    """
+    LZMADecompressor(format=FORMAT_AUTO, memlimit=None, filters=None)
+
+    Create a decompressor object for decompressing data incrementally.
+
+    format specifies the container format of the input stream. If this is
+    FORMAT_AUTO (the default), the decompressor will automatically detect
+    whether the input is FORMAT_XZ or FORMAT_ALONE. Streams created with
+    FORMAT_RAW cannot be autodetected.
+
+    memlimit can be specified to limit the amount of memory used by the
+    decompressor. This will cause decompression to fail if the input
+    cannot be decompressed within the given limit.
+
+    filters specifies a custom filter chain. This argument is required for
+    FORMAT_RAW, and not accepted with any other format. When provided,
+    this should be a sequence of dicts, each indicating the ID and options
+    for a single filter.
+
+    For one-shot decompression, use the decompress() function instead.
+    """
     def __init__(self, format=FORMAT_AUTO, memlimit=None, filters=None):
         decoder_flags = m.LZMA_TELL_ANY_CHECK | m.LZMA_TELL_NO_CHECK
         #decoder_flags = 0
@@ -389,6 +460,16 @@ class LZMADecompressor(object):
             raise ValueError("invalid...")
 
     def decompress(self, data):
+        """
+        decompress(data) -> bytes
+
+        Provide data to the decompressor object. Returns a chunk of
+        decompressed data if possible, or b"" otherwise.
+
+        Attempting to decompress data after the end of the stream is
+        reached raises an EOFError. Any data found after the end of the
+        stream is ignored, and saved in the unused_data attribute.
+        """
         with self.lock:
             if self.eof:
                 raise EOFError("Already...")
@@ -435,6 +516,34 @@ class LZMADecompressor(object):
         return b''.join(ffi.buffer(nn)[:] for nn in outs) + last_out_piece
 
 class LZMACompressor(object):
+    """
+    LZMACompressor(format=FORMAT_XZ, check=-1, preset=None, filters=None)
+
+    Create a compressor object for compressing data incrementally.
+
+    format specifies the container format to use for the output. This can
+    be FORMAT_XZ (default), FORMAT_ALONE, or FORMAT_RAW.
+
+    check specifies the integrity check to use. For FORMAT_XZ, the default
+    is CHECK_CRC64. FORMAT_ALONE and FORMAT_RAW do not suport integrity
+    checks; for these formats, check must be omitted, or be CHECK_NONE.
+
+    The settings used by the compressor can be specified either as a
+    preset compression level (with the 'preset' argument), or in detail
+    as a custom filter chain (with the 'filters' argument). For FORMAT_XZ
+    and FORMAT_ALONE, the default is to use the PRESET_DEFAULT preset
+    level. For FORMAT_RAW, the caller must always specify a filter chain;
+    the raw compressor does not support preset compression levels.
+
+    preset (if provided) should be an integer in the range 0-9, optionally
+    OR-ed with the constant PRESET_EXTREME.
+
+    filters (if provided) should be a sequence of dicts. Each dict should
+    have an entry for "id" indicating the ID of the filter, plus
+    additional entries for options to the filter.
+
+    For one-shot compression, use the compress() function instead.
+    """
     def __init__(self, format=FORMAT_XZ, check=-1, preset=None, filters=None):
         if format != FORMAT_XZ and check not in (-1, m.LZMA_CHECK_NONE):
             raise ValueError("Integrity...")
@@ -477,6 +586,15 @@ class LZMACompressor(object):
             raise ValueError("Invalid...")
 
     def compress(self, data):
+        """
+        compress(data) -> bytes
+
+        Provide data to the compressor object. Returns a chunk of
+        compressed data if possible, or b"" otherwise.
+
+        When you have finished providing data to the compressor, call the
+        flush() method to finish the conversion process.
+        """
         with self.lock:
             if self.flushed:
                 raise ValueError("Compressor...")

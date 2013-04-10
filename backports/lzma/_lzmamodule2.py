@@ -160,6 +160,15 @@ def _new_lzma_stream():
 def add_constant(c):
 	globals()[c] = getattr(m, 'LZMA_' + c)
 
+if sys.version_info >= (2,7):
+	def to_bytes(data):
+		return memoryview(data).tobytes()
+else:
+	def to_bytes(data):
+		if not isinstance(data, basestring):
+			raise TypeError("lzma: must be str/unicode, got %s" % (type(data),))
+		return bytes(data)
+
 for c in ['CHECK_CRC32', 'CHECK_CRC64', 'CHECK_ID_MAX', 'CHECK_NONE', 'CHECK_SHA256', 'FILTER_ARM', 'FILTER_ARMTHUMB', 'FILTER_DELTA', 'FILTER_IA64', 'FILTER_LZMA1', 'FILTER_LZMA2', 'FILTER_POWERPC', 'FILTER_SPARC', 'FILTER_X86', 'MF_BT2', 'MF_BT3', 'MF_BT4', 'MF_HC3', 'MF_HC4', 'MODE_FAST', 'MODE_NORMAL', 'PRESET_DEFAULT', 'PRESET_EXTREME']:
 	add_constant(c)
 
@@ -363,7 +372,7 @@ class LZMADecompressor(object):
 
 		lzs = self.lzs
 
-		lzs.next_in = in_ = ffi.new('char[]', memoryview(data).tobytes())
+		lzs.next_in = in_ = ffi.new('char[]', to_bytes(data))
 		lzs.avail_in = len(data)
 		outs = [ffi.new('char[]', BUFSIZ)]
 		lzs.next_out, = outs
@@ -441,7 +450,7 @@ class LZMACompressor(object):
 
 		lzs = self.lzs
 
-		lzs.next_in = input_ = ffi.new('char[]', memoryview(data).tobytes())
+		lzs.next_in = input_ = ffi.new('char[]', to_bytes(data))
 		lzs.avail_in = len(data)
 		outs = [ffi.new('char[]', BUFSIZ)]
 		lzs.next_out, = outs

@@ -2,6 +2,7 @@ from cffi import FFI
 import threading
 import collections
 import weakref
+import sys
 
 _owns = weakref.WeakKeyDictionary()
 

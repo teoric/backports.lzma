@@ -27,14 +27,10 @@ if __version__ is None:
     sys.exit(1)
 print("This is backports.lzma version %s" % __version__)
 
+import backports.lzma._lzmamodule2 as ffimod
+
 packages = ["backports", "backports.lzma"]
-home = os.path.expanduser("~")
-extens = [Extension('backports/lzma/_lzma',
-                    ['backports/lzma/_lzmamodule.c'],
-                    libraries = ['lzma'],
-                    include_dirs = [os.path.join(home, 'include')],
-                    library_dirs = [os.path.join(home, 'lib')]
-                    )]
+extens = [ffimod.ffi.verifier.get_extension()]
 
 descr = "Backport of Python 3.3's 'lzma' module for XZ/LZMA compressed files."
 long_descr = """This is a backport of the 'lzma' module included in Python 3.3 or later

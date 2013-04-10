@@ -7,6 +7,7 @@ python:
 before_install:
   - sudo apt-get install liblzma-dev
 install:
+  - "pip install cffi"
   - "python setup.py install"
 before_script:
   - "cd test"

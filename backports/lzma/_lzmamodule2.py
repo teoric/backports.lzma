@@ -5,6 +5,8 @@ import collections
 import weakref
 import sys
 
+SUPPORTED_STREAM_FLAGS_VERSION = 0
+
 __all__ = ['CHECK_CRC32',
  'CHECK_CRC64',
  'CHECK_ID_MAX',
@@ -36,6 +38,9 @@ __all__ = ['CHECK_CRC32',
  'MODE_NORMAL',
  'PRESET_DEFAULT',
  'PRESET_EXTREME',
+ 'STREAM_HEADER_SIZE',
+ 'decode_stream_footer',
+ 'decode_index',
  '_decode_filter_properties',
  '_encode_filter_properties',
  'is_check_supported']
@@ -95,13 +100,13 @@ typedef struct {
 } lzma_allocator;
 
 typedef struct {
-        const uint8_t *next_in;
-        size_t avail_in;
-        uint64_t total_in;
+    const uint8_t *next_in;
+    size_t avail_in;
+    uint64_t total_in;
 
-        uint8_t *next_out;
-        size_t avail_out;
-        uint64_t total_out;
+    uint8_t *next_out;
+    size_t avail_out;
+    uint64_t total_out;
     lzma_allocator *allocator;
     ...;
 } lzma_stream;
@@ -138,9 +143,11 @@ typedef struct {
 typedef struct {
     uint32_t version;
     lzma_vli backward_size;
-    lzma_check check;
+    int check;
     ...;
 } lzma_stream_flags;
+
+typedef ... lzma_index;
 
 bool lzma_check_is_supported(int check);
 
@@ -161,6 +168,64 @@ void lzma_end(lzma_stream *strm);
 
 // Extras
 int lzma_stream_footer_decode(lzma_stream_flags *options, const uint8_t *in);
+
+enum lzma_index_iter_mode { LZMA_INDEX_ITER_ANY, LZMA_INDEX_ITER_STREAM,
+    LZMA_INDEX_ITER_BLOCK, LZMA_INDEX_ITER_NONEMPTY_BLOCK, ... };
+
+// Indexes
+lzma_index* lzma_index_init(lzma_allocator *al);
+void lzma_index_end(lzma_index *i, lzma_allocator *al);
+int lzma_index_buffer_decode(lzma_index **i, uint64_t *memlimit,
+    lzma_allocator *allocator, const uint8_t *in, size_t *in_pos,
+    size_t in_size);
+lzma_vli lzma_index_block_count(const lzma_index *i);
+lzma_vli lzma_index_stream_size(const lzma_index *i);
+lzma_vli lzma_index_uncompressed_size(const lzma_index *i);
+lzma_vli lzma_index_size(const lzma_index *i);
+
+typedef struct {
+    // can't have partial anonymous struct
+	struct {
+		const lzma_stream_flags *flags;
+		const void *reserved_ptr1;
+		const void *reserved_ptr2;
+		const void *reserved_ptr3;
+		lzma_vli number;
+		lzma_vli block_count;
+		lzma_vli compressed_offset;
+		lzma_vli uncompressed_offset;
+		lzma_vli compressed_size;
+		lzma_vli uncompressed_size;
+		lzma_vli padding;
+		lzma_vli reserved_vli1;
+		lzma_vli reserved_vli2;
+		lzma_vli reserved_vli3;
+		lzma_vli reserved_vli4;
+	} stream;
+	struct {
+		lzma_vli number_in_file;
+		lzma_vli compressed_file_offset;
+		lzma_vli uncompressed_file_offset;
+		lzma_vli number_in_stream;
+		lzma_vli compressed_stream_offset;
+		lzma_vli uncompressed_stream_offset;
+		lzma_vli uncompressed_size;
+		lzma_vli unpadded_size;
+		lzma_vli total_size;
+		lzma_vli reserved_vli1;
+		lzma_vli reserved_vli2;
+		lzma_vli reserved_vli3;
+		lzma_vli reserved_vli4;
+		const void *reserved_ptr1;
+		const void *reserved_ptr2;
+		const void *reserved_ptr3;
+		const void *reserved_ptr4;
+	} block;
+    ...;
+} lzma_index_iter;
+
+void lzma_index_iter_init(lzma_index_iter *iter, const lzma_index *i);
+int lzma_index_iter_next(lzma_index_iter *iter, int mode);
 
 // Properties
 int lzma_properties_size(uint32_t *size, const lzma_filter *filter);
@@ -219,7 +284,7 @@ else:
             raise TypeError("lzma: must be str/unicode, got %s" % (type(data),))
         return bytes(data)
 
-for c in ['CHECK_CRC32', 'CHECK_CRC64', 'CHECK_ID_MAX', 'CHECK_NONE', 'CHECK_SHA256', 'FILTER_ARM', 'FILTER_ARMTHUMB', 'FILTER_DELTA', 'FILTER_IA64', 'FILTER_LZMA1', 'FILTER_LZMA2', 'FILTER_POWERPC', 'FILTER_SPARC', 'FILTER_X86', 'MF_BT2', 'MF_BT3', 'MF_BT4', 'MF_HC3', 'MF_HC4', 'MODE_FAST', 'MODE_NORMAL', 'PRESET_DEFAULT', 'PRESET_EXTREME']:
+for c in ['CHECK_CRC32', 'CHECK_CRC64', 'CHECK_ID_MAX', 'CHECK_NONE', 'CHECK_SHA256', 'FILTER_ARM', 'FILTER_ARMTHUMB', 'FILTER_DELTA', 'FILTER_IA64', 'FILTER_LZMA1', 'FILTER_LZMA2', 'FILTER_POWERPC', 'FILTER_SPARC', 'FILTER_X86', 'MF_BT2', 'MF_BT3', 'MF_BT4', 'MF_HC3', 'MF_HC4', 'MODE_FAST', 'MODE_NORMAL', 'PRESET_DEFAULT', 'PRESET_EXTREME', 'STREAM_HEADER_SIZE']:
     add_constant(c)
 
 def _parse_format(format):
@@ -392,6 +457,66 @@ def _decode_filter_properties(filter_id, encoded_props):
     finally:
         # TODO do we need this, the only use of m.free?
         m.free(filter.options)
+
+def decode_stream_footer(footer):
+    footer_o = ffi.new('char[]', to_bytes(footer))
+    stream_flags = ffi.new('lzma_stream_flags*')
+    catch_lzma_error(m.lzma_stream_footer_decode, stream_flags, footer_o)
+    if stream_flags.version > SUPPORTED_STREAM_FLAGS_VERSION:
+        raise LZMAError("Stream is too new for liblzma version")
+    return stream_flags.backward_size
+
+"""
+def _new_lzma_index():
+    return ffi.gc(m.lzma_index_init(ffi.NULL), _dealloc_lzma_index)
+    
+def _dealloc_lzma_index(i):
+    m.lzma_index_end(i, ffi.NULL)
+"""
+
+def decode_index(s):
+    indexp = ffi.new('lzma_index**')
+    memlimit = ffi.new('uint64_t*')
+    memlimit[0] = m.UINT64_MAX
+    allocator = ffi.NULL
+    in_buf = ffi.new('char[]', to_bytes(s))
+    in_pos = ffi.new('size_t*')
+    in_pos[0] = 0
+    catch_lzma_error(m.lzma_index_buffer_decode, indexp,
+        memlimit, allocator, in_buf, in_pos, len(s))
+    return Index(indexp[0], allocator)
+
+class Index(object):
+    def __init__(self, i, allocator):
+        self.i = i
+        self.allocator = allocator
+    def uncompressed_size(self):
+        return m.lzma_index_uncompressed_size(self.i)
+    def block_count(self):
+        return m.lzma_index_block_count(self.i)
+    def index_size(self):
+        return m.lzma_index_size(self.i)
+    def __iter__(self):
+        return self.iterator()
+
+    def iterator(self, type=m.LZMA_INDEX_ITER_BLOCK):
+        iterator = ffi.new('lzma_index_iter*')
+        m.lzma_index_iter_init(iterator, self.i)
+        while not m.lzma_index_iter_next(iterator, type):
+            yield IndexIter(iterator)
+        
+    def __del__(self):
+        m.lzma_index_end(self.i, self.allocator)
+
+def IndexIter(iterator):
+    return (iterator.stream.number, iterator.stream.block_count,
+        iterator.stream.compressed_offset, iterator.stream.uncompressed_offset,
+        iterator.stream.compressed_size, iterator.stream.uncompressed_size,
+        iterator.block.number_in_file, iterator.block.compressed_file_offset,
+        iterator.block.uncompressed_file_offset, iterator.block.number_in_stream,
+        iterator.block.compressed_stream_offset, iterator.block.uncompressed_stream_offset,
+        iterator.block.uncompressed_size, iterator.block.unpadded_size,
+        iterator.block.total_size)
 
 class Allocator(object):
     def __init__(self):

@@ -16,6 +16,8 @@ __all__ = [
     "FORMAT_AUTO", "FORMAT_XZ", "FORMAT_ALONE", "FORMAT_RAW",
     "MF_HC3", "MF_HC4", "MF_BT2", "MF_BT3", "MF_BT4",
     "MODE_FAST", "MODE_NORMAL", "PRESET_DEFAULT", "PRESET_EXTREME",
+    "STREAM_HEADER_SIZE",
+    "decode_stream_footer", "decode_index",
 
     "LZMACompressor", "LZMADecompressor", "LZMAFile", "LZMAError",
     "open", "compress", "decompress", "is_check_supported",

@@ -315,7 +315,7 @@ class Allocator(object):
 	def _addr(self, ptr):
 		return long(ffi.cast('uintptr_t', ptr))
 	def __free(self, _opaque, ptr):
-		if self._addr(ptr) == 0L: return
+		if self._addr(ptr) == 0: return
 		del self.owns[self._addr(ptr)]
 
 class LZMADecompressor(object):

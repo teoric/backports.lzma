@@ -1,3 +1,4 @@
+# vim: ts=4 sw=4 et
 from cffi import FFI
 import threading
 import collections
@@ -18,6 +19,7 @@ ffi.cdef("""
 #define LZMA_DELTA_TYPE_BYTE ...
 #define LZMA_TELL_ANY_CHECK ...
 #define LZMA_TELL_NO_CHECK ...
+#define LZMA_VLI_UNKNOWN ...
 #define LZMA_FILTER_LZMA1 ...
 #define LZMA_FILTER_LZMA2 ...
 #define LZMA_FILTER_DELTA ...
@@ -104,7 +106,10 @@ bool lzma_check_is_supported(int check);
 int lzma_auto_decoder(lzma_stream *strm, uint64_t memlimit, uint32_t flags);
 int lzma_stream_decoder(lzma_stream *strm, uint64_t memlimit, uint32_t flags);
 int lzma_alone_decoder(lzma_stream *strm, uint64_t memlimit);
+int lzma_raw_decoder(lzma_stream *strm, const lzma_filter *filters);
 int lzma_easy_encoder(lzma_stream *strm, uint32_t preset, int check);
+int lzma_alone_encoder(lzma_stream *strm, lzma_options_lzma* options);
+int lzma_raw_encoder(lzma_stream *strm, const lzma_filter *filters);
 
 int lzma_get_check(const lzma_stream *strm);
 
@@ -149,9 +154,7 @@ void _pylzma_allocator_init2(lzma_allocator *al, void *my_own_alloc (void*,size_
 """, libraries=['lzma'])
 
 def go_and_do(f):
-    def _f(x):
-        return f(x)
-    return _f
+    return f
 
 def _new_lzma_stream():
     ret = ffi.new('lzma_stream*')
@@ -172,6 +175,12 @@ else:
 
 for c in ['CHECK_CRC32', 'CHECK_CRC64', 'CHECK_ID_MAX', 'CHECK_NONE', 'CHECK_SHA256', 'FILTER_ARM', 'FILTER_ARMTHUMB', 'FILTER_DELTA', 'FILTER_IA64', 'FILTER_LZMA1', 'FILTER_LZMA2', 'FILTER_POWERPC', 'FILTER_SPARC', 'FILTER_X86', 'MF_BT2', 'MF_BT3', 'MF_BT4', 'MF_HC3', 'MF_HC4', 'MODE_FAST', 'MODE_NORMAL', 'PRESET_DEFAULT', 'PRESET_EXTREME']:
     add_constant(c)
+
+def _parse_format(format):
+    if isinstance(format, (int, long)):
+        return format
+    else:
+        raise TypeError
 
 CHECK_UNKNOWN = CHECK_ID_MAX + 1
 FORMAT_AUTO, FORMAT_XZ, FORMAT_ALONE, FORMAT_RAW = range(4)
@@ -197,7 +206,19 @@ def catch_lzma_error(fun, *args):
     if lzret in (m.LZMA_OK, m.LZMA_GET_CHECK, m.LZMA_NO_CHECK, m.LZMA_STREAM_END):
         return lzret
     elif lzret == m.LZMA_DATA_ERROR:
-        raise LZMAError("Corrupt...")
+        raise LZMAError("Corrupt input data")
+    elif lzret == m.LZMA_MEM_ERROR:
+        raise MemoryError
+    elif lzret == m.LZMA_UNSUPPORTED_CHECK:
+        raise LZMAError("Unsupported integrity check")
+    elif lzret == m.LZMA_FORMAT_ERROR:
+        raise LZMAError("Input format not supported by decoder")
+    elif lzret == m.LZMA_OPTIONS_ERROR:
+        raise LZMAError("Invalid or unsupported options")
+    elif lzret == m.LZMA_BUF_ERROR:
+        raise LZMAError("Insufficient buffer space")
+    elif lzret == m.LZMA_PROG_ERROR:
+        raise LZMAError("Internal error")
     else:
         raise LZMAError("Unrecognised...", lzret)
 
@@ -271,8 +292,10 @@ def parse_filter_chain_spec(filterspecs):
     for i in range(m.LZMA_FILTERS_MAX+1):
         try:
             filterspec = filterspecs[i]
+        except KeyError:
+            raise TypeError
         except IndexError:
-            filters[i].id == m.LZMA_VLI_UNKNOWN
+            filters[i].id = m.LZMA_VLI_UNKNOWN
         else:
             filter = parse_filter_spec(filterspecs[i])
             children.append(filter)
@@ -342,6 +365,7 @@ class LZMADecompressor(object):
             raise ValueError("Must...")
         elif format != FORMAT_RAW and filters is not None:
             raise ValueError("Cannot...")
+        format = _parse_format(format)
         self.lock = threading.Lock()
         self.check = CHECK_UNKNOWN
         self.unused_data = b''
@@ -358,7 +382,9 @@ class LZMADecompressor(object):
             catch_lzma_error(m.lzma_alone_decoder, self.lzs, memlimit)
         elif format == FORMAT_RAW:
             self.check = CHECK_NONE
-            raise NotImplementedError
+            filters = parse_filter_chain_spec(filters)
+            catch_lzma_error(m.lzma_raw_decoder, self.lzs,
+                filters)
         else:
             raise ValueError("invalid...")
 
@@ -414,6 +440,9 @@ class LZMACompressor(object):
             raise ValueError("Integrity...")
         if preset is not None and filters is not None:
             raise ValueError("Cannot...")
+        if preset is None:
+            preset = m.LZMA_PRESET_DEFAULT
+        format = _parse_format(format)
         self.lock = threading.Lock()
         self.flushed = 0
         self.lzs = _new_lzma_stream()
@@ -421,8 +450,6 @@ class LZMACompressor(object):
         #self.lzs.allocator = self.allocator.lzma_allocator
         if format == FORMAT_XZ:
             if filters is None:
-                if preset is None:
-                    preset = m.LZMA_PRESET_DEFAULT
                 if check == -1:
                     check = m.LZMA_CHECK_CRC64
                 catch_lzma_error(m.lzma_easy_encoder, self.lzs,
@@ -432,11 +459,20 @@ class LZMACompressor(object):
                 catch_lzma_error(m.lzma_stream_encoder, self.lzs,
                     filters, check)
         elif format == FORMAT_ALONE:
-            raise NotImplementedError
+            if filters is None:
+                options = ffi.new('lzma_options_lzma*')
+                if m.lzma_lzma_preset(options, preset):
+                    raise LZMAError("Invalid...")
+                catch_lzma_error(m.lzma_alone_encoder, self.lzs,
+                    options)
+            else:
+                raise NotImplementedError
         elif format == FORMAT_RAW:
             if filters is None:
                 raise ValueError("Must...")
-            raise NotImplementedError
+            filters = parse_filter_chain_spec(filters)
+            catch_lzma_error(m.lzma_raw_encoder, self.lzs,
+                filters)
         else:
             raise ValueError("Invalid...")
 
@@ -484,5 +520,3 @@ class LZMACompressor(object):
                 raise ValueError("Repeated...")
             self.flushed = 1
             return self._compress(b'', action=m.LZMA_FINISH)
-
-#errors = 18

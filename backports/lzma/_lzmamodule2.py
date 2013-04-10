@@ -135,6 +135,13 @@ typedef struct {
     ...;
 } lzma_filter;
 
+typedef struct {
+    uint32_t version;
+    lzma_vli backward_size;
+    lzma_check check;
+    ...;
+} lzma_stream_flags;
+
 bool lzma_check_is_supported(int check);
 
 // Encoder/Decoder
@@ -150,6 +157,11 @@ int lzma_get_check(const lzma_stream *strm);
 
 int lzma_code(lzma_stream *strm, int action);
 
+void lzma_end(lzma_stream *strm);
+
+// Extras
+int lzma_stream_footer_decode(lzma_stream_flags *options, const uint8_t *in);
+
 // Properties
 int lzma_properties_size(uint32_t *size, const lzma_filter *filter);
 int lzma_properties_encode(const lzma_filter *filter, uint8_t *props);
@@ -157,11 +169,10 @@ int lzma_properties_decode(lzma_filter *filter, lzma_allocator *allocator,
     const uint8_t *props, size_t props_size);
 int lzma_lzma_preset(lzma_options_lzma* options, uint32_t preset);
 
-
-void lzma_end(lzma_stream *strm);
-
 // Special functions
 void _pylzma_stream_init(lzma_stream *strm);
+
+// TODO remove
 void _pylzma_allocator_init(lzma_allocator *al);
 void _pylzma_allocator_init2(lzma_allocator *al, void *my_own_alloc (void*, size_t, size_t), void my_own_free (void*, void*));
 
@@ -379,6 +390,7 @@ def _decode_filter_properties(filter_id, encoded_props):
     try:
         return build_filter_spec(filter)
     finally:
+        # TODO do we need this, the only use of m.free?
         m.free(filter.options)
 
 class Allocator(object):

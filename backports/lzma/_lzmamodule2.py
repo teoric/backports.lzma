@@ -183,7 +183,6 @@ def catch_lzma_error(fun, *args):
 	try:
 		lzret = fun(*args)
 	except:
-		print "%r%r" % (fun, args)
 		raise
 	if lzret in (m.LZMA_OK, m.LZMA_GET_CHECK, m.LZMA_NO_CHECK, m.LZMA_STREAM_END):
 		return lzret
@@ -310,15 +309,12 @@ class Allocator(object):
 		self.lzma_allocator.opaque = ffi.NULL
 		#m._pylzma_allocator_init2(self.lzma_allocator, alloc, free)
 	def __alloc(self, _opaque, _nmemb, size):
-		#print repr((self, _opaque, _nmemb, size))
 		new_mem = ffi.new('char[]', size)
-		#print "%r: Allocated %r" % (self, new_mem)
 		self.owns[self._addr(new_mem)] = new_mem
 		return new_mem
 	def _addr(self, ptr):
 		return long(ffi.cast('uintptr_t', ptr))
 	def __free(self, _opaque, ptr):
-		#print "%r: Freed %r" % (self, ptr)
 		if self._addr(ptr) == 0L: return
 		del self.owns[self._addr(ptr)]
 

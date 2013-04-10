@@ -264,13 +264,10 @@ void _pylzma_allocator_init2(lzma_allocator *al, void *my_own_alloc (void*,size_
 }
 """, libraries=['lzma'])
 
-def go_and_do(f):
-    return f
-
 def _new_lzma_stream():
     ret = ffi.new('lzma_stream*')
     m._pylzma_stream_init(ret)
-    return ffi.gc(ret, go_and_do(m.lzma_end))
+    return ffi.gc(ret, m.lzma_end)
 
 def add_constant(c):
     globals()[c] = getattr(m, 'LZMA_' + c)
@@ -283,6 +280,9 @@ else:
         if not isinstance(data, basestring):
             raise TypeError("lzma: must be str/unicode, got %s" % (type(data),))
         return bytes(data)
+
+if sys.version_info >= (3,0):
+    long = int
 
 for c in ['CHECK_CRC32', 'CHECK_CRC64', 'CHECK_ID_MAX', 'CHECK_NONE', 'CHECK_SHA256', 'FILTER_ARM', 'FILTER_ARMTHUMB', 'FILTER_DELTA', 'FILTER_IA64', 'FILTER_LZMA1', 'FILTER_LZMA2', 'FILTER_POWERPC', 'FILTER_SPARC', 'FILTER_X86', 'MF_BT2', 'MF_BT3', 'MF_BT4', 'MF_HC3', 'MF_HC4', 'MODE_FAST', 'MODE_NORMAL', 'PRESET_DEFAULT', 'PRESET_EXTREME', 'STREAM_HEADER_SIZE']:
     add_constant(c)

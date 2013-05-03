@@ -1560,12 +1560,12 @@ COMPRESSED_RAW_4 = (
 
 def test_main():
     run_unittest(
-        #CompressorDecompressorTestCase,
-        #CompressDecompressFunctionTestCase,
-        #FileTestCase,
-        #OpenTestCase,
-        #MiscellaneousTestCase,
-        StreamFooterTestCase,
+        CompressorDecompressorTestCase,
+        CompressDecompressFunctionTestCase,
+        FileTestCase,
+        OpenTestCase,
+        MiscellaneousTestCase,
+        #StreamFooterTestCase,
     )
 
 if __name__ == "__main__":

@@ -25,6 +25,7 @@ __all__ = [
 ]
 
 import io
+from io import SEEK_SET, SEEK_CUR, SEEK_END
 from ._lzmamodule2 import *
 from ._lzmamodule2 import _encode_filter_properties, _decode_filter_properties
 
@@ -377,8 +378,14 @@ class LZMAFile(io.BufferedIOBase):
         else:
             raise ValueError("Invalid value for whence: {}".format(whence))
 
-        print self._index.block_containing(offset)
-        import pdb; pdb.set_trace()
+        want_stream, want_block = self._index.block_containing(offset)
+
+        if want_block == have_block and offset > self._pos:
+            self._read_block(offset - self._pos, return_data=False)
+            return self._pos
+        else:
+            #...
+            pass
 
         # Make it so that offset is the number of bytes to skip forward.
         if offset is None:

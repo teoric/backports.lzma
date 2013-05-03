@@ -26,6 +26,7 @@ __all__ = [
 
 import io
 from io import SEEK_SET, SEEK_CUR, SEEK_END
+from io import DEFAULT_BUFFER_SIZE as _BUFFER_SIZE
 from ._lzmamodule2 import *
 from ._lzmamodule2 import _encode_filter_properties, _decode_filter_properties
 
@@ -97,7 +98,6 @@ class LZMAFile(io.BufferedIOBase):
         self._mode = _MODE_CLOSED
         self._pos = 0
         self._size = -1
-        self._index = None
 
         if mode in ("r", "rb"):
             if check != -1:
@@ -217,7 +217,7 @@ class LZMAFile(io.BufferedIOBase):
             if self._decompressor.unused_data:
                 rawblock = self._decompressor.unused_data
             else:
-                rawblock = self._fp.read(io.DEFAULT_BUFFER_SIZE)
+                rawblock = self._fp.read(_BUFFER_SIZE)
 
             if not rawblock:
                 if self._decompressor.eof:
@@ -334,7 +334,7 @@ class LZMAFile(io.BufferedIOBase):
 
     # Rewind the file to the beginning of the data stream.
     def _rewind(self):
-        self._fp.seek(0, io.SEEK_SET)
+        self._fp.seek(0, SEEK_SET)
         self._mode = _MODE_READ
         self._pos = 0
         self._decompressor = LZMADecompressor(**self._init_args)
@@ -343,14 +343,14 @@ class LZMAFile(io.BufferedIOBase):
     def _read_index(self):
         if self._index:
             return
-        self._fp.seek(-STREAM_HEADER_SIZE, io.SEEK_END)
+        self._fp.seek(-STREAM_HEADER_SIZE, SEEK_END)
         # TODO handle stream padding by trying a few other offsets
         index_size = decode_stream_footer(self._fp.read(STREAM_HEADER_SIZE))
-        self._fp.seek(-(STREAM_HEADER_SIZE+index_size), io.SEEK_END)
+        self._fp.seek(-(STREAM_HEADER_SIZE+index_size), SEEK_END)
         self._index = decode_index(self._fp.read(index_size))
         self._size = self._index.uncompressed_size
         
-    def seek(self, offset, whence=io.SEEK_SET):
+    def seek(self, offset, whence=SEEK_SET):
         """Change the file position.
 
         The new position is specified by offset, relative to the
@@ -366,26 +366,19 @@ class LZMAFile(io.BufferedIOBase):
         this operation may be extremely slow.
         """
         self._check_can_seek()
-        self._read_index()
 
         # Recalculate offset as an absolute file position.
-        if whence == io.SEEK_SET:
+        if whence == SEEK_SET:
             pass
-        elif whence == io.SEEK_CUR:
+        elif whence == SEEK_CUR:
             offset = self._pos + offset
-        elif whence == io.SEEK_END:
+        elif whence == SEEK_END:
+            # Seeking relative to EOF - we need to know the file's size.
+            if self._size < 0:
+                self._read_all(return_data=False)
             offset = self._size + offset
         else:
             raise ValueError("Invalid value for whence: {}".format(whence))
-
-        want_stream, want_block = self._index.block_containing(offset)
-
-        if want_block == have_block and offset > self._pos:
-            self._read_block(offset - self._pos, return_data=False)
-            return self._pos
-        else:
-            #...
-            pass
 
         # Make it so that offset is the number of bytes to skip forward.
         if offset is None:

@@ -1,3 +1,4 @@
+# vim: ts=4 sw=4 et
 """Interface to the liblzma compression library.
 
 This module provides a class for reading and writing compressed files,
@@ -33,10 +34,8 @@ _MODE_READ     = 1
 _MODE_READ_EOF = 2
 _MODE_WRITE    = 3
 
-_BUFFER_SIZE = 8192
 
-
-__version__ = "0.0.1"
+__version__ = "0.0.3"
 
 class LZMAFile(io.BufferedIOBase):
 
@@ -97,6 +96,7 @@ class LZMAFile(io.BufferedIOBase):
         self._mode = _MODE_CLOSED
         self._pos = 0
         self._size = -1
+        self._index = None
 
         if mode in ("r", "rb"):
             if check != -1:
@@ -216,7 +216,7 @@ class LZMAFile(io.BufferedIOBase):
             if self._decompressor.unused_data:
                 rawblock = self._decompressor.unused_data
             else:
-                rawblock = self._fp.read(_BUFFER_SIZE)
+                rawblock = self._fp.read(io.DEFAULT_BUFFER_SIZE)
 
             if not rawblock:
                 if self._decompressor.eof:
@@ -333,21 +333,31 @@ class LZMAFile(io.BufferedIOBase):
 
     # Rewind the file to the beginning of the data stream.
     def _rewind(self):
-        self._fp.seek(0, 0)
+        self._fp.seek(0, io.SEEK_SET)
         self._mode = _MODE_READ
         self._pos = 0
         self._decompressor = LZMADecompressor(**self._init_args)
         self._buffer = None
 
-    def seek(self, offset, whence=0):
+    def _read_index(self):
+        if self._index:
+            return
+        self._fp.seek(-STREAM_HEADER_SIZE, io.SEEK_END)
+        # TODO handle stream padding by trying a few other offsets
+        index_size = decode_stream_footer(self._fp.read(STREAM_HEADER_SIZE))
+        self._fp.seek(-(STREAM_HEADER_SIZE+index_size), io.SEEK_END)
+        self._index = decode_index(self._fp.read(index_size))
+        self._size = self._index.uncompressed_size
+        
+    def seek(self, offset, whence=io.SEEK_SET):
         """Change the file position.
 
         The new position is specified by offset, relative to the
         position indicated by whence. Possible values for whence are:
 
-            0: start of stream (default): offset must not be negative
-            1: current stream position
-            2: end of stream; offset must not be positive
+            io.SEEK_SET: start of stream (default): offset must not be negative
+            io.SEEK_CUR: current stream position
+            io.SEEK_END: end of stream; offset must not be positive
 
         Returns the new file position.
 
@@ -355,19 +365,20 @@ class LZMAFile(io.BufferedIOBase):
         this operation may be extremely slow.
         """
         self._check_can_seek()
+        self._read_index()
 
         # Recalculate offset as an absolute file position.
-        if whence == 0:
+        if whence == io.SEEK_SET:
             pass
-        elif whence == 1:
+        elif whence == io.SEEK_CUR:
             offset = self._pos + offset
-        elif whence == 2:
-            # Seeking relative to EOF - we need to know the file's size.
-            if self._size < 0:
-                self._read_all(return_data=False)
+        elif whence == io.SEEK_END:
             offset = self._size + offset
         else:
             raise ValueError("Invalid value for whence: {}".format(whence))
+
+        print self._index.block_containing(offset)
+        import pdb; pdb.set_trace()
 
         # Make it so that offset is the number of bytes to skip forward.
         if offset is None:

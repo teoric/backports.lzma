@@ -4,6 +4,7 @@ import threading
 import collections
 import weakref
 import sys
+import io
 
 SUPPORTED_STREAM_FLAGS_VERSION = 0
 
@@ -175,6 +176,9 @@ enum lzma_index_iter_mode { LZMA_INDEX_ITER_ANY, LZMA_INDEX_ITER_STREAM,
 // Indexes
 lzma_index* lzma_index_init(lzma_allocator *al);
 void lzma_index_end(lzma_index *i, lzma_allocator *al);
+int lzma_index_stream_padding(lzma_index *i, lzma_vli stream_padding);
+lzma_index* lzma_index_dup(const lzma_index *i, lzma_allocator *al);
+int lzma_index_cat(lzma_index *dest, lzma_index *src, lzma_allocator *al);
 int lzma_index_buffer_decode(lzma_index **i, uint64_t *memlimit,
     lzma_allocator *allocator, const uint8_t *in, size_t *in_pos,
     size_t in_size);
@@ -226,6 +230,7 @@ typedef struct {
 
 void lzma_index_iter_init(lzma_index_iter *iter, const lzma_index *i);
 int lzma_index_iter_next(lzma_index_iter *iter, int mode);
+int lzma_index_iter_locate(lzma_index_iter *iter, lzma_vli target);
 
 // Properties
 int lzma_properties_size(uint32_t *size, const lzma_filter *filter);
@@ -490,12 +495,19 @@ class Index(object):
     def __init__(self, i, allocator):
         self.i = i
         self.allocator = allocator
+
+    @property
     def uncompressed_size(self):
         return m.lzma_index_uncompressed_size(self.i)
+
+    @property
     def block_count(self):
         return m.lzma_index_block_count(self.i)
+
+    @property
     def index_size(self):
         return m.lzma_index_size(self.i)
+
     def __iter__(self):
         return self.iterator()
 
@@ -503,11 +515,33 @@ class Index(object):
         iterator = ffi.new('lzma_index_iter*')
         m.lzma_index_iter_init(iterator, self.i)
         while not m.lzma_index_iter_next(iterator, type):
-            yield IndexIter(iterator)
-        
+            yield (IndexStreamData(iterator.stream), IndexBlockData(iterator.block))
+
+    def block_containing(self, offset):
+        iterator = ffi.new('lzma_index_iter*')
+        m.lzma_index_iter_init(iterator, self.i)
+        if m.lzma_index_iter_locate(iterator, offset):
+            return None
+        return (IndexStreamData(iterator.stream), IndexBlockData(iterator.block))
+
     def __del__(self):
         m.lzma_index_end(self.i, self.allocator)
 
+    def copy(self):
+        new_i = m.lzma_index_dup(self.i, self.allocator)
+        return Index(new_i, self.allocator)
+
+    deepcopy = copy
+
+    def append(self, other_index, padding=0):
+        catch_lzma_error(m.lzma_index_stream_padding, self.i, padding)
+        # m.lzma_index_cat frees its second parameter so we
+        # must copy it first
+        other_index_i = m.lzma_index_dup(other_index.i, self.allocator)
+        catch_lzma_error(m.lzma_index_cat, self.i, 
+            other_index_i, self.allocator)
+
+"""
 def IndexIter(iterator):
     return (iterator.stream.number, iterator.stream.block_count,
         iterator.stream.compressed_offset, iterator.stream.uncompressed_offset,
@@ -517,6 +551,26 @@ def IndexIter(iterator):
         iterator.block.compressed_stream_offset, iterator.block.uncompressed_stream_offset,
         iterator.block.uncompressed_size, iterator.block.unpadded_size,
         iterator.block.total_size)
+"""
+
+class _StructToPy(object):
+    __slots__ = ()
+    def __init__(self, struct_obj):
+        # TODO make PyPy-fast
+        for attr in self.__slots__:
+            setattr(self, attr, getattr(struct_obj, attr))
+    def __repr__(self):
+        descriptions = ('%s=%r' % (attr, getattr(self, attr)) for attr in self.__slots__)
+        return "<%s %s>" % (type(self).__name__, ' '.join(descriptions))
+
+class IndexStreamData(_StructToPy):
+    __slots__ = ('number', 'block_count', 'compressed_offset', 'uncompressed_offset',
+        'compressed_size', 'uncompressed_size')
+
+class IndexBlockData(_StructToPy):
+    __slots__ = ('number_in_file', 'compressed_file_offset', 'uncompressed_file_offset',
+        'compressed_stream_offset', 'uncompressed_stream_offset',
+        'uncompressed_size', 'unpadded_size', 'total_size')
 
 class Allocator(object):
     def __init__(self):
@@ -613,7 +667,7 @@ class LZMADecompressor(object):
             return self._decompress(data)
 
     def _decompress(self, data):
-        BUFSIZ = 8192
+        BUFSIZ = io.DEFAULT_BUFFER_SIZE
 
         lzs = self.lzs
 

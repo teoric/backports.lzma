@@ -1,6 +1,7 @@
 # vim: ts=4 sw=4 et
 from cffi import FFI
 import threading
+import functools
 import collections
 import weakref
 import sys
@@ -27,6 +28,7 @@ __all__ = ['CHECK_CRC32',
  'FORMAT_AUTO',
  'FORMAT_RAW',
  'FORMAT_XZ',
+ 'FORMAT_BLOCK',
  'LZMACompressor',
  'LZMADecompressor',
  'LZMAError',
@@ -40,6 +42,8 @@ __all__ = ['CHECK_CRC32',
  'PRESET_DEFAULT',
  'PRESET_EXTREME',
  'STREAM_HEADER_SIZE',
+ 'decode_block_header_size',
+ 'decode_stream_header',
  'decode_stream_footer',
  'decode_index',
  '_decode_filter_properties',
@@ -150,6 +154,14 @@ typedef struct {
 
 typedef ... lzma_index;
 
+typedef struct {
+    uint32_t version;
+    uint32_t header_size;
+    lzma_vli compressed_size;
+    lzma_filter* filters;
+    ...;
+} lzma_block;
+
 bool lzma_check_is_supported(int check);
 
 // Encoder/Decoder
@@ -157,6 +169,8 @@ int lzma_auto_decoder(lzma_stream *strm, uint64_t memlimit, uint32_t flags);
 int lzma_stream_decoder(lzma_stream *strm, uint64_t memlimit, uint32_t flags);
 int lzma_alone_decoder(lzma_stream *strm, uint64_t memlimit);
 int lzma_raw_decoder(lzma_stream *strm, const lzma_filter *filters);
+int lzma_block_decoder(lzma_stream *strm, lzma_block *block);
+
 int lzma_easy_encoder(lzma_stream *strm, uint32_t preset, int check);
 int lzma_alone_encoder(lzma_stream *strm, lzma_options_lzma* options);
 int lzma_raw_encoder(lzma_stream *strm, const lzma_filter *filters);
@@ -168,7 +182,10 @@ int lzma_code(lzma_stream *strm, int action);
 void lzma_end(lzma_stream *strm);
 
 // Extras
+int lzma_stream_header_decode(lzma_stream_flags *options, const uint8_t *in);
 int lzma_stream_footer_decode(lzma_stream_flags *options, const uint8_t *in);
+int lzma_stream_flags_compare(const lzma_stream_flags *a,
+    const lzma_stream_flags *b);
 
 enum lzma_index_iter_mode { LZMA_INDEX_ITER_ANY, LZMA_INDEX_ITER_STREAM,
     LZMA_INDEX_ITER_BLOCK, LZMA_INDEX_ITER_NONEMPTY_BLOCK, ... };
@@ -186,9 +203,16 @@ lzma_vli lzma_index_block_count(const lzma_index *i);
 lzma_vli lzma_index_stream_size(const lzma_index *i);
 lzma_vli lzma_index_uncompressed_size(const lzma_index *i);
 lzma_vli lzma_index_size(const lzma_index *i);
+lzma_vli lzma_index_total_size(const lzma_index *i);
+
+// Blocks
+int lzma_block_header_decode(lzma_block *block, lzma_allocator *al,
+    const uint8_t *in);
+int lzma_block_compressed_size(lzma_block *block, lzma_vli unpadded_size);
 
 typedef struct {
-    // can't have partial anonymous struct
+    // cffi doesn't support partial anonymous structs
+    // so we write the definition in full
 	struct {
 		const lzma_stream_flags *flags;
 		const void *reserved_ptr1;
@@ -241,6 +265,7 @@ int lzma_lzma_preset(lzma_options_lzma* options, uint32_t preset);
 
 // Special functions
 void _pylzma_stream_init(lzma_stream *strm);
+void _pylzma_block_header_size_decode(uint32_t b);
 
 // TODO remove
 void _pylzma_allocator_init(lzma_allocator *al);
@@ -254,6 +279,10 @@ m = ffi.verify("""
 void _pylzma_stream_init(lzma_stream *strm) {
     lzma_stream tmp = LZMA_STREAM_INIT; // macro from lzma.h
     *strm = tmp;
+}
+
+uint32_t _pylzma_block_header_size_decode(uint32_t b) {
+    return lzma_block_header_size_decode(b); // macro from lzma.h
 }
 
 void* my_alloc(void* opaque, size_t nmemb, size_t size) { return PyMem_Malloc(size); }
@@ -299,7 +328,7 @@ def _parse_format(format):
         raise TypeError
 
 CHECK_UNKNOWN = CHECK_ID_MAX + 1
-FORMAT_AUTO, FORMAT_XZ, FORMAT_ALONE, FORMAT_RAW = range(4)
+FORMAT_AUTO, FORMAT_XZ, FORMAT_ALONE, FORMAT_RAW, FORMAT_BLOCK = range(5)
 
 BCJ_FILTERS = (m.LZMA_FILTER_X86,
     m.LZMA_FILTER_POWERPC,
@@ -463,23 +492,23 @@ def _decode_filter_properties(filter_id, encoded_props):
         # TODO do we need this, the only use of m.free?
         m.free(filter.options)
 
-def decode_stream_footer(footer):
-    footer_o = ffi.new('char[]', to_bytes(footer))
+def _decode_stream_header_or_footer(decode_f, in_bytes):
+    footer_o = ffi.new('char[]', to_bytes(in_bytes))
     stream_flags = ffi.new('lzma_stream_flags*')
-    catch_lzma_error(m.lzma_stream_footer_decode, stream_flags, footer_o)
-    if stream_flags.version > SUPPORTED_STREAM_FLAGS_VERSION:
-        raise LZMAError("Stream is too new for liblzma version")
-    return stream_flags.backward_size
+    catch_lzma_error(decode_f, stream_flags, footer_o)
+    return StreamFlags(stream_flags)
 
-"""
-def _new_lzma_index():
-    return ffi.gc(m.lzma_index_init(ffi.NULL), _dealloc_lzma_index)
-    
-def _dealloc_lzma_index(i):
-    m.lzma_index_end(i, ffi.NULL)
-"""
+decode_stream_footer = functools.partial(_decode_stream_header_or_footer,
+    m.lzma_stream_footer_decode)
 
-def decode_index(s):
+decode_stream_header = functools.partial(_decode_stream_header_or_footer,
+    m.lzma_stream_header_decode)
+
+def decode_block_header_size(in_byte):
+    # lzma_block_header_size_decode(b) (((uint32_t)(b) + 1) * 4)
+    return (ord(in_byte) + 1) * 4
+
+def decode_index(s, stream_padding=0):
     indexp = ffi.new('lzma_index**')
     memlimit = ffi.new('uint64_t*')
     memlimit[0] = m.UINT64_MAX
@@ -489,12 +518,13 @@ def decode_index(s):
     in_pos[0] = 0
     catch_lzma_error(m.lzma_index_buffer_decode, indexp,
         memlimit, allocator, in_buf, in_pos, len(s))
-    return Index(indexp[0], allocator)
+    return Index(indexp[0], allocator, stream_padding)
 
 class Index(object):
-    def __init__(self, i, allocator):
+    def __init__(self, i, allocator, stream_padding=0):
         self.i = i
         self.allocator = allocator
+        m.lzma_index_stream_padding(i, stream_padding)
 
     @property
     def uncompressed_size(self):
@@ -508,6 +538,10 @@ class Index(object):
     def index_size(self):
         return m.lzma_index_size(self.i)
 
+    @property
+    def blocks_size(self):
+        return m.lzma_index_total_size(self.i)
+
     def __iter__(self):
         return self.iterator()
 
@@ -517,10 +551,11 @@ class Index(object):
         while not m.lzma_index_iter_next(iterator, type):
             yield (IndexStreamData(iterator.stream), IndexBlockData(iterator.block))
 
-    def block_containing(self, offset):
+    def find(self, offset):
         iterator = ffi.new('lzma_index_iter*')
         m.lzma_index_iter_init(iterator, self.i)
         if m.lzma_index_iter_locate(iterator, offset):
+            # offset too high
             return None
         return (IndexStreamData(iterator.stream), IndexBlockData(iterator.block))
 
@@ -533,25 +568,12 @@ class Index(object):
 
     deepcopy = copy
 
-    def append(self, other_index, padding=0):
-        catch_lzma_error(m.lzma_index_stream_padding, self.i, padding)
+    def append(self, other_index):
         # m.lzma_index_cat frees its second parameter so we
         # must copy it first
         other_index_i = m.lzma_index_dup(other_index.i, self.allocator)
         catch_lzma_error(m.lzma_index_cat, self.i, 
             other_index_i, self.allocator)
-
-"""
-def IndexIter(iterator):
-    return (iterator.stream.number, iterator.stream.block_count,
-        iterator.stream.compressed_offset, iterator.stream.uncompressed_offset,
-        iterator.stream.compressed_size, iterator.stream.uncompressed_size,
-        iterator.block.number_in_file, iterator.block.compressed_file_offset,
-        iterator.block.uncompressed_file_offset, iterator.block.number_in_stream,
-        iterator.block.compressed_stream_offset, iterator.block.uncompressed_stream_offset,
-        iterator.block.uncompressed_size, iterator.block.unpadded_size,
-        iterator.block.total_size)
-"""
 
 class _StructToPy(object):
     __slots__ = ()
@@ -571,6 +593,29 @@ class IndexBlockData(_StructToPy):
     __slots__ = ('number_in_file', 'compressed_file_offset', 'uncompressed_file_offset',
         'compressed_stream_offset', 'uncompressed_stream_offset',
         'uncompressed_size', 'unpadded_size', 'total_size')
+
+class StreamFlags(object):
+    def __init__(self, i):
+        self.i = i
+
+    version = property(lambda self: self.i.version)
+    check = property(lambda self: self.i.check)
+    backward_size = property(lambda self: self.i.backward_size)
+
+    @property
+    def supported(self):
+        return self.version > SUPPORTED_STREAM_FLAGS_VERSION
+
+    def check_supported(self):
+        if not self.supported:
+            raise LZMAError("Stream is too new for liblzma version")
+
+    def matches(self, other):
+        return m.lzma_stream_flags_compare(self.i, other.i) == m.LZMA_OK
+
+    def copy(self):
+        other_i = ffi.new('lzma_stream_flags*', self.i)
+        return StreamFlags(other_i)
 
 class Allocator(object):
     def __init__(self):
@@ -614,7 +659,7 @@ class LZMADecompressor(object):
 
     For one-shot decompression, use the decompress() function instead.
     """
-    def __init__(self, format=FORMAT_AUTO, memlimit=None, filters=None):
+    def __init__(self, format=FORMAT_AUTO, memlimit=None, filters=None, header=None, unpadded_size=None):
         decoder_flags = m.LZMA_TELL_ANY_CHECK | m.LZMA_TELL_NO_CHECK
         #decoder_flags = 0
         if memlimit is not None:
@@ -623,10 +668,19 @@ class LZMADecompressor(object):
             #memlimit = long(memlimit)
         else:
             memlimit = m.UINT64_MAX
+
         if format == FORMAT_RAW and filters is None:
             raise ValueError("Must...")
         elif format != FORMAT_RAW and filters is not None:
             raise ValueError("Cannot...")
+
+        if format == FORMAT_BLOCK and header is None:
+            raise ValueError("Must...")
+        elif format != FORMAT_BLOCK and header is not None:
+            raise ValueError("Cannot...")
+        elif format != FORMAT_BLOCK and unpadded_size is not None:
+            raise ValueError("Cannot...")
+
         format = _parse_format(format)
         self.lock = threading.Lock()
         self.check = CHECK_UNKNOWN
@@ -635,6 +689,7 @@ class LZMADecompressor(object):
         self.lzs = _new_lzma_stream()
         self.allocator = Allocator()
         #self.lzs.allocator = self.allocator.lzma_allocator
+
         if format == FORMAT_AUTO:
             catch_lzma_error(m.lzma_auto_decoder, self.lzs, memlimit, decoder_flags)
         elif format == FORMAT_XZ:
@@ -647,6 +702,17 @@ class LZMADecompressor(object):
             filters = parse_filter_chain_spec(filters)
             catch_lzma_error(m.lzma_raw_decoder, self.lzs,
                 filters)
+        elif format == FORMAT_BLOCK:
+            self.__block = block = ffi.new('lzma_block*')
+            block.version = 0
+            block.header_size = len(header)
+            block.filters = self.__filters = ffi.new('lzma_filter[]', m.LZMA_FILTERS_MAX+1)
+            header_b = ffi.new('char[]', to_bytes(header))
+            catch_lzma_error(m.lzma_block_header_decode, block, self.lzs.allocator, header_b)
+            if unpadded_size is not None:
+                catch_lzma_error(m.lzma_block_compressed_size, block, unpadded_size)
+            print self.__block.compressed_size
+            catch_lzma_error(m.lzma_block_decoder, self.lzs, block)
         else:
             raise ValueError("invalid...")
 

@@ -273,7 +273,110 @@ class _LZMAFile(io.BufferedIOBase):
         self._check_not_closed()
         return self._pos
 
-_SeekableLZMAFile = _LZMAFile # TODO
+def _peek(fp, n):
+    ret = fp.read(n)
+    if len(ret) != n:
+        raise LZMAError("file too small")
+    fp.seek(-n, SEEK_CUR)
+    return ret
+
+class _SeekableXZFile(io.BufferedIOBase):
+    def __init__(self, fp, close_fp=False):
+        self._mode = _MODE_CLOSED
+        self._fp = fp
+        self._closefp = close_fp
+        index = None
+        filesize = fp.seek(0, SEEK_END)
+
+        while fp.tell() > 0:
+            # read one stream
+            if fp.tell() < 2 * STREAM_HEADER_SIZE:
+                raise LZMAError("file too small")
+
+            # read stream paddings (4 bytes each)
+            fp.seek(-4, SEEK_CUR)
+            padding = 0
+            while _peek(fp, 4) == b'\x00\x00\x00\x00':
+                fp.seek(-4, SEEK_CUR)
+                padding += 4
+
+            fp.seek(-STREAM_HEADER_SIZE + 4, SEEK_CUR)
+
+            stream_flags = decode_stream_footer(_peek(fp, STREAM_HEADER_SIZE))
+            fp.seek(-stream_flags.backward_size, SEEK_CUR)
+
+            new_index = decode_index(_peek(fp, stream_flags.backward_size), padding)
+            fp.seek(-new_index.blocks_size, SEEK_CUR)
+            fp.seek(-STREAM_HEADER_SIZE, SEEK_CUR)
+
+            stream_flags2 = decode_stream_header(_peek(fp, STREAM_HEADER_SIZE))
+            if not stream_flags.matches(stream_flags2):
+                raise LZMAError("header and footer don't match")
+            
+            if index is not None:
+                new_index.append(index)
+            index = new_index
+        if index is None:
+            raise LZMAError("file is empty")
+        self._index = index
+        self._mode = _MODE_READ
+        self._init_decompressor(*index.find(0))
+        self.seek(0, SEEK_SET)
+
+    def _init_decompressor(self, stream_data, block_data):
+        print repr((stream_data, block_data))
+        self._pos = self._block_offset = block_data.uncompressed_file_offset
+        self._fp.seek(block_data.compressed_file_offset, SEEK_SET)
+        self._block_read_bytes = 0
+        self._block_uncompressed_bytes = 0
+        self._block_total_bytes = block_data.total_size
+        header_size = decode_block_header_size(_peek(self._fp, 1))
+        header = _peek(self._fp, header_size)
+        self._decompressor = LZMADecompressor(format=FORMAT_BLOCK, header=header,
+            unpadded_size=block_data.unpadded_size)
+
+    def seek(self, offset, whence=SEEK_SET):
+        """Bla"""
+        return self._pos
+
+    def tell(self):
+        self._check_not_closed()
+        return self._pos
+
+    @property
+    def closed(self):
+        return self._mode == _MODE_CLOSED
+
+    def _check_not_closed(self):
+        if self.closed:
+            raise ValueError("I/O operation on closed file")
+
+    def close(self):
+        """Flush and close the file.
+
+        May be called more than once without error. Once the file is
+        closed, any other operation on it will raise a ValueError.
+        """
+        if self.closed:
+            return
+        try:
+            pass
+        finally:
+            try:
+                if self._closefp:
+                    self._fp.close()
+            finally:
+                self._fp = None
+                self._closefp = False
+                self._mode = _MODE_CLOSED
+
+    def readable(self):
+        self._check_not_closed()
+        return True
+
+    def seekable(self):
+        self._check_not_closed()
+        return True
 
 """
     def _read_index(self):
@@ -288,7 +391,7 @@ _SeekableLZMAFile = _LZMAFile # TODO
 """
         
 def LZMAFile(filename, mode="r",
-                 format=None, check=-1, preset=None, filters=None):
+                 format=None, check=-1, preset=None, filters=None, seek=True):
     """Open an LZMA-compressed file in binary mode.
 
     filename is a... TODO original docstring
@@ -300,6 +403,11 @@ def LZMAFile(filename, mode="r",
     format specifies the container format to use for the file.
     If mode is "r", this defaults to FORMAT_AUTO. Otherwise, the
     default is FORMAT_XZ.
+
+    seek specifies whether to provide support for seeking in the file.
+    This is only supported for xz files. This skips to the end of the file
+    to read the index so if the file is on a slow medium (e.g. tape) you
+    may wish to set this to False.
 
     check specifies the integrity check to use. This argument can
     only be used when opening a file for writing. For FORMAT_XZ,
@@ -322,7 +430,8 @@ def LZMAFile(filename, mode="r",
     FORMAT_ALONE, the default is to use the PRESET_DEFAULT preset
     level. For FORMAT_RAW, the caller must always specify a filter
     chain; the raw compressor does not support preset compression
-    levels.
+    levels. The *seek* argument is not meaningful, and should be
+    omitted.
 
     preset (if provided) should be an integer in the range 0-9,
     optionally OR-ed with the constant PRESET_EXTREME.
@@ -342,13 +451,18 @@ def LZMAFile(filename, mode="r",
     else:
         raise TypeError("filename must be a str or bytes object, or a file")
 
-    if fp.seekable():
-        return _SeekableLZMAFile(fp, mode=mode, format=format, check=check, close_fp=close_fp,
-            preset=preset, filters=filters)
-    else:
-        return _LZMAFile(fp, mode=mode, format=format, check=check, close_fp=close_fp,
-            preset=preset, filters=filters)
+    if fp.seekable() and seek and 'r' in mode:
+        if format is None:
+            format = FORMAT_AUTO
+        if format == FORMAT_XZ or (format == FORMAT_AUTO and _detect_xz(fp)):
+            return _SeekableXZFile(fp, close_fp=close_fp)
 
+    return _LZMAFile(fp, mode=mode, format=format, check=check, close_fp=close_fp,
+        preset=preset, filters=filters)
+
+def _detect_xz(fp):
+    fp.seek(0)
+    return _peek(fp, 6) == b'\xfd7zXZ\x00'
 
 def open(filename, mode="rb",
          format=None, check=-1, preset=None, filters=None,

@@ -39,62 +39,18 @@ _MODE_WRITE    = 3
 
 __version__ = "0.0.3"
 
-class LZMAFile(io.BufferedIOBase):
-
+class _LZMAFile(io.BufferedIOBase):
     """A file object providing transparent LZMA (de)compression.
 
-    An LZMAFile can act as a wrapper for an existing file object, or
-    refer directly to a named file on disk.
+    An _LZMAFile acts as a wrapper for an existing file object. To
+    refer directly to a named file on disk, use lzma.open.
 
-    Note that LZMAFile provides a *binary* file interface - data read
+    Note that _LZMAFile provides a *binary* file interface - data read
     is returned as bytes, and data to be written must be given as bytes.
     """
 
-    def __init__(self, filename=None, mode="r",
-                 format=None, check=-1, preset=None, filters=None):
-        """Open an LZMA-compressed file in binary mode.
-
-        filename can be either an actual file name (given as a str or
-        bytes object), in which case the named file is opened, or it can
-        be an existing file object to read from or write to.
-
-        mode can be "r" for reading (default), "w" for (over)writing, or
-        "a" for appending. These can equivalently be given as "rb", "wb",
-        and "ab" respectively.
-
-        format specifies the container format to use for the file.
-        If mode is "r", this defaults to FORMAT_AUTO. Otherwise, the
-        default is FORMAT_XZ.
-
-        check specifies the integrity check to use. This argument can
-        only be used when opening a file for writing. For FORMAT_XZ,
-        the default is CHECK_CRC64. FORMAT_ALONE and FORMAT_RAW do not
-        support integrity checks - for these formats, check must be
-        omitted, or be CHECK_NONE.
-
-        When opening a file for reading, the *preset* argument is not
-        meaningful, and should be omitted. The *filters* argument should
-        also be omitted, except when format is FORMAT_RAW (in which case
-        it is required).
-
-        When opening a file for writing, the settings used by the
-        compressor can be specified either as a preset compression
-        level (with the *preset* argument), or in detail as a custom
-        filter chain (with the *filters* argument). For FORMAT_XZ and
-        FORMAT_ALONE, the default is to use the PRESET_DEFAULT preset
-        level. For FORMAT_RAW, the caller must always specify a filter
-        chain; the raw compressor does not support preset compression
-        levels.
-
-        preset (if provided) should be an integer in the range 0-9,
-        optionally OR-ed with the constant PRESET_EXTREME.
-
-        filters (if provided) should be a sequence of dicts. Each dict
-        should have an entry for "id" indicating ID of the filter, plus
-        additional entries for options to the filter.
-        """
-        self._fp = None
-        self._closefp = False
+    def __init__(self, fp, mode="r",
+                 format=None, check=-1, close_fp=False, preset=None, filters=None):
         self._mode = _MODE_CLOSED
         self._pos = 0
         self._size = -1
@@ -124,17 +80,9 @@ class LZMAFile(io.BufferedIOBase):
         else:
             raise ValueError("Invalid mode: {!r}".format(mode))
 
-        if isinstance(filename, (str, bytes)):
-            if "b" not in mode:
-                mode += "b"
-            self._fp = io.open(filename, mode)
-            self._closefp = True
-            self._mode = mode_code
-        elif hasattr(filename, "read") or hasattr(filename, "write"):
-            self._fp = filename
-            self._mode = mode_code
-        else:
-            raise TypeError("filename must be a str or bytes object, or a file")
+        self._fp = fp
+        self._closefp = close_fp
+        self._mode = mode_code
 
     def close(self):
         """Flush and close the file.
@@ -170,10 +118,6 @@ class LZMAFile(io.BufferedIOBase):
         self._check_not_closed()
         return self._fp.fileno()
 
-    def seekable(self):
-        """Return whether the file supports seeking."""
-        return self.readable() and self._fp.seekable()
-
     def readable(self):
         """Return whether the file was opened for reading."""
         self._check_not_closed()
@@ -197,14 +141,6 @@ class LZMAFile(io.BufferedIOBase):
     def _check_can_write(self):
         if not self.writable():
             raise io.UnsupportedOperation("File not open for writing")
-
-    def _check_can_seek(self):
-        if not self.readable():
-            raise io.UnsupportedOperation("Seeking is only supported "
-                                          "on files open for reading")
-        if not self._fp.seekable():
-            raise io.UnsupportedOperation("The underlying file object "
-                                          "does not support seeking")
 
     # Fill the readahead buffer if it is empty. Returns False on EOF.
     def _fill_buffer(self):
@@ -332,14 +268,14 @@ class LZMAFile(io.BufferedIOBase):
         self._pos += len(data)
         return len(data)
 
-    # Rewind the file to the beginning of the data stream.
-    def _rewind(self):
-        self._fp.seek(0, SEEK_SET)
-        self._mode = _MODE_READ
-        self._pos = 0
-        self._decompressor = LZMADecompressor(**self._init_args)
-        self._buffer = None
+    def tell(self):
+        """Return the current file position."""
+        self._check_not_closed()
+        return self._pos
 
+_SeekableLZMAFile = _LZMAFile # TODO
+
+"""
     def _read_index(self):
         if self._index:
             return
@@ -349,57 +285,69 @@ class LZMAFile(io.BufferedIOBase):
         self._fp.seek(-(STREAM_HEADER_SIZE+index_size), SEEK_END)
         self._index = decode_index(self._fp.read(index_size))
         self._size = self._index.uncompressed_size
+"""
         
-    def seek(self, offset, whence=SEEK_SET):
-        """Change the file position.
+def LZMAFile(filename, mode="r",
+                 format=None, check=-1, preset=None, filters=None):
+    """Open an LZMA-compressed file in binary mode.
 
-        The new position is specified by offset, relative to the
-        position indicated by whence. Possible values for whence are:
+    filename is a... TODO original docstring
 
-            io.SEEK_SET: start of stream (default): offset must not be negative
-            io.SEEK_CUR: current stream position
-            io.SEEK_END: end of stream; offset must not be positive
+    mode can be "r" for reading (default), "w" for (over)writing, or
+    "a" for appending. These can equivalently be given as "rb", "wb",
+    and "ab" respectively.
 
-        Returns the new file position.
+    format specifies the container format to use for the file.
+    If mode is "r", this defaults to FORMAT_AUTO. Otherwise, the
+    default is FORMAT_XZ.
 
-        Note that seeking is emulated, sp depending on the parameters,
-        this operation may be extremely slow.
-        """
-        self._check_can_seek()
+    check specifies the integrity check to use. This argument can
+    only be used when opening a file for writing. For FORMAT_XZ,
+    the default is CHECK_CRC64. FORMAT_ALONE and FORMAT_RAW do not
+    support integrity checks - for these formats, check must be
+    omitted, or be CHECK_NONE.
 
-        # Recalculate offset as an absolute file position.
-        if whence == SEEK_SET:
-            pass
-        elif whence == SEEK_CUR:
-            offset = self._pos + offset
-        elif whence == SEEK_END:
-            # Seeking relative to EOF - we need to know the file's size.
-            if self._size < 0:
-                self._read_all(return_data=False)
-            offset = self._size + offset
-        else:
-            raise ValueError("Invalid value for whence: {}".format(whence))
+    close_fp specifies whether the LZMAFile "owns" the underlying stream
+    and should close it when the LZMAFile is closed.
 
-        # Make it so that offset is the number of bytes to skip forward.
-        if offset is None:
-            #This is not needed on Python 3 where the comparison to self._pos
-            #will fail with a TypeError.
-            raise TypeError("Seek offset should be an integer, not None")
-        if offset < self._pos:
-            self._rewind()
-        else:
-            offset -= self._pos
+    When opening a file for reading, the *preset* argument is not
+    meaningful, and should be omitted. The *filters* argument should
+    also be omitted, except when format is FORMAT_RAW (in which case
+    it is required).
 
-        # Read and discard data until we reach the desired position.
-        if self._mode != _MODE_READ_EOF:
-            self._read_block(offset, return_data=False)
+    When opening a file for writing, the settings used by the
+    compressor can be specified either as a preset compression
+    level (with the *preset* argument), or in detail as a custom
+    filter chain (with the *filters* argument). For FORMAT_XZ and
+    FORMAT_ALONE, the default is to use the PRESET_DEFAULT preset
+    level. For FORMAT_RAW, the caller must always specify a filter
+    chain; the raw compressor does not support preset compression
+    levels.
 
-        return self._pos
+    preset (if provided) should be an integer in the range 0-9,
+    optionally OR-ed with the constant PRESET_EXTREME.
 
-    def tell(self):
-        """Return the current file position."""
-        self._check_not_closed()
-        return self._pos
+    filters (if provided) should be a sequence of dicts. Each dict
+    should have an entry for "id" indicating ID of the filter, plus
+    additional entries for options to the filter.
+    """
+    if isinstance(filename, (str, bytes)):
+        if "b" not in mode:
+            mode += "b"
+        fp = io.open(filename, mode)
+        close_fp = True
+    elif hasattr(filename, "read") or hasattr(filename, "write"):
+        fp = filename
+        close_fp = False
+    else:
+        raise TypeError("filename must be a str or bytes object, or a file")
+
+    if fp.seekable():
+        return _SeekableLZMAFile(fp, mode=mode, format=format, check=check, close_fp=close_fp,
+            preset=preset, filters=filters)
+    else:
+        return _LZMAFile(fp, mode=mode, format=format, check=check, close_fp=close_fp,
+            preset=preset, filters=filters)
 
 
 def open(filename, mode="rb",

@@ -312,31 +312,191 @@ class _SeekableXZFile(io.BufferedIOBase):
             stream_flags2 = decode_stream_header(_peek(fp, STREAM_HEADER_SIZE))
             if not stream_flags.matches(stream_flags2):
                 raise LZMAError("header and footer don't match")
+            # TODO add to index
             
             if index is not None:
                 new_index.append(index)
             index = new_index
         if index is None:
             raise LZMAError("file is empty")
+
         self._index = index
+        self._buffer = None
+        self._size = index.uncompressed_size
         self._mode = _MODE_READ
         self._init_decompressor(*index.find(0))
-        self.seek(0, SEEK_SET)
 
     def _init_decompressor(self, stream_data, block_data):
-        print repr((stream_data, block_data))
         self._pos = self._block_offset = block_data.uncompressed_file_offset
         self._fp.seek(block_data.compressed_file_offset, SEEK_SET)
-        self._block_read_bytes = 0
-        self._block_uncompressed_bytes = 0
-        self._block_total_bytes = block_data.total_size
         header_size = decode_block_header_size(_peek(self._fp, 1))
-        header = _peek(self._fp, header_size)
+        header = self._fp.read(header_size)
+        import pdb; pdb.set_trace()
         self._decompressor = LZMADecompressor(format=FORMAT_BLOCK, header=header,
             unpadded_size=block_data.unpadded_size)
 
-    def seek(self, offset, whence=SEEK_SET):
-        """Bla"""
+    def _next_block(self):
+        next_block_details = self._index.find(self._pos)
+        if next_block_details is None:
+            return False
+        else:
+            self._init_decompressor(*next_block_details)
+
+    def peek(self, size=-1):
+        """Return buffered data without advancing the file position.
+
+        Always returns at least one byte of data, unless at EOF.
+        The exact number of bytes returned is unspecified.
+        """
+        self._check_not_closed()
+        if self._mode == _MODE_READ_EOF or not self._fill_buffer():
+            return b""
+        return self._buffer
+
+    def read(self, size=-1):
+        """Read up to size uncompressed bytes from the file.
+
+        If size is negative or omitted, read until EOF is reached.
+        Returns b"" if the file is already at EOF.
+        """
+        self._check_not_closed()
+        if size is None:
+            #This is not needed on Python 3 where the comparison to zeo
+            #will fail with a TypeError.
+            raise TypeError("Read size should be an integer, not None")
+        if self._mode == _MODE_READ_EOF or size == 0:
+            return b""
+        elif size < 0:
+            return self._read_all()
+        else:
+            return self._read_block(size)
+
+    def read1(self, size=-1):
+        """Read up to size uncompressed bytes, while trying to avoid
+        making multiple reads from the underlying stream.
+
+        Returns b"" if the file is at EOF.
+        """
+        # Usually, read1() calls _fp.read() at most once. However, sometimes
+        # this does not give enough data for the decompressor to make progress.
+        # In this case we make multiple reads, to avoid returning b"".
+        self._check_not_closed()
+        if size is None:
+            #This is not needed on Python 3 where the comparison to zero
+            #will fail with a TypeError. 
+            raise TypeError("Read size should be an integer, not None")
+        if (size == 0 or self._mode == _MODE_READ_EOF or
+            not self._fill_buffer()):
+            return b""
+        if 0 < size < len(self._buffer):
+            data = self._buffer[:size]
+            self._buffer = self._buffer[size:]
+        else:
+            data = self._buffer
+            self._buffer = None
+        self._pos += len(data)
+        return data
+
+    # Fill the readahead buffer if it is empty. Returns False on EOF.
+    def _fill_buffer(self):
+        # Depending on the input data, our call to the decompressor may not
+        # return any data. In this case, try again after reading another block.
+        import pdb; pdb.set_trace()
+        while True:
+            if self._buffer:
+                return True
+
+            if self._decompressor.unused_data:
+                rawblock = self._decompressor.unused_data
+            else:
+                rawblock = self._fp.read(_BUFFER_SIZE)
+
+            if not rawblock:
+                if self._decompressor.eof:
+                    if not self._next_block():
+                        self._mode = _MODE_READ_EOF
+                        return False
+                else:
+                    raise EOFError("Compressed file ended before the "
+                                   "end-of-stream marker was reached")
+
+            # Continue to next stream.
+            if self._decompressor.eof:
+                self._decompressor = LZMADecompressor(**self._init_args)
+
+            self._buffer = self._decompressor.decompress(rawblock)
+
+    # Read data until EOF.
+    # If return_data is false, consume the data without returning it.
+    def _read_all(self, return_data=True):
+        blocks = []
+        while self._fill_buffer():
+            if return_data:
+                blocks.append(self._buffer)
+            self._pos += len(self._buffer)
+            self._buffer = None
+        if return_data:
+            return b"".join(blocks)
+
+    # Read a block of up to n bytes.
+    # If return_data is false, consume the data without returning it.
+    def _read_block(self, n, return_data=True):
+        blocks = []
+        while n > 0 and self._fill_buffer():
+            if n < len(self._buffer):
+                data = self._buffer[:n]
+                self._buffer = self._buffer[n:]
+            else:
+                data = self._buffer
+                self._buffer = None
+            if return_data:
+                blocks.append(data)
+            self._pos += len(data)
+            n -= len(data)
+        if return_data:
+            return b"".join(blocks)
+
+    def seek(self, offset, whence=0):
+        """Change the file position.
+
+        The new position is specified by offset, relative to the
+        position indicated by whence. Possible values for whence are:
+
+            0: start of stream (default): offset must not be negative
+            1: current stream position
+            2: end of stream; offset must not be positive
+
+        Returns the new file position.
+
+        Note that seeking is emulated, sp depending on the parameters,
+        this operation may be extremely slow.
+        """
+        self._check_can_seek()
+
+        # Recalculate offset as an absolute file position.
+        if whence == 0:
+            pass
+        elif whence == 1:
+            offset = self._pos + offset
+        elif whence == 2:
+            offset = self._size + offset
+        else:
+            raise ValueError("Invalid value for whence: {}".format(whence))
+
+        # Make it so that offset is the number of bytes to skip forward.
+        if offset is None:
+            #This is not needed on Python 3 where the comparison to self._pos
+            #will fail with a TypeError.
+            raise TypeError("Seek offset should be an integer, not None")
+        if offset < self._pos:
+            self._rewind()
+        else:
+            offset -= self._pos
+
+        # Read and discard data until we reach the desired position.
+        if self._mode != _MODE_READ_EOF:
+            self._read_block(offset, return_data=False)
+
         return self._pos
 
     def tell(self):
@@ -360,15 +520,14 @@ class _SeekableXZFile(io.BufferedIOBase):
         if self.closed:
             return
         try:
-            pass
+            if self._closefp:
+                self._fp.close()
         finally:
-            try:
-                if self._closefp:
-                    self._fp.close()
-            finally:
-                self._fp = None
-                self._closefp = False
-                self._mode = _MODE_CLOSED
+            self._decompressor = None
+            self._buffer = None
+            self._fp = None
+            self._closefp = False
+            self._mode = _MODE_CLOSED
 
     def readable(self):
         self._check_not_closed()
@@ -378,18 +537,6 @@ class _SeekableXZFile(io.BufferedIOBase):
         self._check_not_closed()
         return True
 
-"""
-    def _read_index(self):
-        if self._index:
-            return
-        self._fp.seek(-STREAM_HEADER_SIZE, SEEK_END)
-        # TODO handle stream padding by trying a few other offsets
-        index_size = decode_stream_footer(self._fp.read(STREAM_HEADER_SIZE))
-        self._fp.seek(-(STREAM_HEADER_SIZE+index_size), SEEK_END)
-        self._index = decode_index(self._fp.read(index_size))
-        self._size = self._index.uncompressed_size
-"""
-        
 def LZMAFile(filename, mode="r",
                  format=None, check=-1, preset=None, filters=None, seek=True):
     """Open an LZMA-compressed file in binary mode.

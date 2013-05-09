@@ -711,7 +711,7 @@ class LZMADecompressor(object):
             catch_lzma_error(m.lzma_block_header_decode, block, self.lzs.allocator, header_b)
             if unpadded_size is not None:
                 catch_lzma_error(m.lzma_block_compressed_size, block, unpadded_size)
-            print self.__block.compressed_size
+            self.expected_size = block.compressed_size
             catch_lzma_error(m.lzma_block_decoder, self.lzs, block)
         else:
             raise ValueError("invalid...")

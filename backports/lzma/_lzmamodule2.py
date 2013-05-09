@@ -238,7 +238,6 @@ int lzma_lzma_preset(lzma_options_lzma* options, uint32_t preset);
 void _pylzma_stream_init(lzma_stream *strm);
 
 // TODO remove
-void _pylzma_allocator_init(lzma_allocator *al);
 void _pylzma_allocator_init2(lzma_allocator *al, void *my_own_alloc (void*, size_t, size_t), void my_own_free (void*, void*));
 
 void free(void* ptr);
@@ -251,13 +250,6 @@ void _pylzma_stream_init(lzma_stream *strm) {
     *strm = tmp;
 }
 
-void* my_alloc(void* opaque, size_t nmemb, size_t size) { return PyMem_Malloc(size); }
-void my_free(void* opaque, void *ptr) { PyMem_Free(ptr); }
-
-void _pylzma_allocator_init(lzma_allocator *al) {
-    al->alloc = *my_alloc;
-    al->free = *my_free;
-}
 void _pylzma_allocator_init2(lzma_allocator *al, void *my_own_alloc (void*,size_t,size_t), void my_own_free (void*,void*)) {
     al->alloc = my_own_alloc;
     al->free = my_own_free;
@@ -648,7 +640,8 @@ class LZMADecompressor(object):
                 lzs.next_out = outs[-1]
                 lzs.avail_out = siz
         last_out = outs.pop()
-        last_out_piece = ffi.buffer(last_out[0:siz-lzs.avail_out])[:]
+        last_out_len = siz - lzs.avail_out
+        last_out_piece = ffi.buffer(last_out[0:last_out_len], last_out_len)[:]
 
         return b''.join(ffi.buffer(nn)[:] for nn in outs) + last_out_piece
 
@@ -765,7 +758,8 @@ class LZMACompressor(object):
                 lzs.next_out = outs[-1]
                 lzs.avail_out = siz
         last_out = outs.pop()
-        last_out_piece = ffi.buffer(last_out[0:siz-lzs.avail_out])[:]
+        last_out_len = siz - lzs.avail_out
+        last_out_piece = ffi.buffer(last_out[0:last_out_len], last_out_len)[:]
 
         return b''.join(ffi.buffer(nn)[:] for nn in outs) + last_out_piece
 

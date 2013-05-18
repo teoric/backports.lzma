@@ -28,8 +28,8 @@ if "size" not in inspect.getargspec(bigmemtest).args:
 # The following style import doesn't work on Python 3.0,
 # from test.support import import_module
 # lzma = import_module("backports.lzma")
-from backports import lzma
-from backports.lzma import LZMACompressor, LZMADecompressor, LZMAError, LZMAFile
+import lzmaffi as lzma
+from lzmaffi import LZMACompressor, LZMADecompressor, LZMAError, LZMAFile
 
 
 class CompressorDecompressorTestCase(unittest.TestCase):

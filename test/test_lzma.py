@@ -1,4 +1,3 @@
-# vim: ts=4 sw=4 et
 from io import BytesIO, UnsupportedOperation
 import os
 import sys
@@ -31,6 +30,7 @@ if "size" not in inspect.getargspec(bigmemtest).args:
 # lzma = import_module("backports.lzma")
 from backports import lzma
 from backports.lzma import LZMACompressor, LZMADecompressor, LZMAError, LZMAFile
+
 
 class CompressorDecompressorTestCase(unittest.TestCase):
 
@@ -535,9 +535,7 @@ class FileTestCase(unittest.TestCase):
     def test_fileno(self):
         f = LZMAFile(BytesIO(COMPRESSED_XZ))
         try:
-            #self.assertRaises(UnsupportedOperation, f.fileno)
-            # pypy's BytesIO doesn't have a fileno attribute
-            self.assertRaises(Exception, f.fileno)
+            self.assertRaises(UnsupportedOperation, f.fileno)
         finally:
             f.close()
         self.assertRaises(ValueError, f.fileno)
@@ -1162,14 +1160,6 @@ class MiscellaneousTestCase(unittest.TestCase):
         spec2 = lzma._decode_filter_properties(lzma.FILTER_LZMA1, reencoded)
         self.assertEqual(spec1, spec2)
 
-class StreamFooterTestCase(unittest.TestCase):
-    def test_decode_stream_footer(self):
-        slen = 12
-        self.assertEqual(lzma.decode_stream_footer(COMPRESSED_XZ[-12:]), slen)
-        idx = lzma.decode_index(COMPRESSED_XZ[-12-slen:-slen])
-        full_idx_info = list(iter(idx))
-        self.assertEqual(full_idx_info,
-            [(1, 1, 0, 0, 1056, 1921, 1, 12, 0, 1, 12, 0, 1921, 1019, 1020)])
 
 # Test data:
 
@@ -1565,7 +1555,6 @@ def test_main():
         FileTestCase,
         OpenTestCase,
         MiscellaneousTestCase,
-        StreamFooterTestCase,
     )
 
 if __name__ == "__main__":

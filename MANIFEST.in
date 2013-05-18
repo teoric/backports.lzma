@@ -1,0 +1,5 @@
+setup.py
+lzmaffi/__init__.py
+lzmaffi/_lzmamodule2.py
+lzmaffi/compat.py
+test/test_lzma.py

@@ -95,6 +95,8 @@ enum lzma_ret { LZMA_OK, LZMA_STREAM_END, LZMA_NO_CHECK,
 
 enum lzma_action { LZMA_RUN, LZMA_FINISH, ...};
 
+enum lzma_check { ... };
+
 typedef uint64_t lzma_vli;
 
 typedef struct {
@@ -157,6 +159,7 @@ typedef ... lzma_index;
 typedef struct {
     uint32_t version;
     uint32_t header_size;
+    int check;
     lzma_vli compressed_size;
     lzma_filter* filters;
     ...;
@@ -659,7 +662,7 @@ class LZMADecompressor(object):
 
     For one-shot decompression, use the decompress() function instead.
     """
-    def __init__(self, format=FORMAT_AUTO, memlimit=None, filters=None, header=None, unpadded_size=None):
+    def __init__(self, format=FORMAT_AUTO, memlimit=None, filters=None, header=None, check=None, unpadded_size=None):
         decoder_flags = m.LZMA_TELL_ANY_CHECK | m.LZMA_TELL_NO_CHECK
         #decoder_flags = 0
         if memlimit is not None:
@@ -674,11 +677,9 @@ class LZMADecompressor(object):
         elif format != FORMAT_RAW and filters is not None:
             raise ValueError("Cannot...")
 
-        if format == FORMAT_BLOCK and header is None:
+        if format == FORMAT_BLOCK and (header is None or unpadded_size is None or check is None):
             raise ValueError("Must...")
-        elif format != FORMAT_BLOCK and header is not None:
-            raise ValueError("Cannot...")
-        elif format != FORMAT_BLOCK and unpadded_size is not None:
+        elif format != FORMAT_BLOCK and (header is not None or unpadded_size is not None or check is not None):
             raise ValueError("Cannot...")
 
         format = _parse_format(format)
@@ -705,6 +706,7 @@ class LZMADecompressor(object):
         elif format == FORMAT_BLOCK:
             self.__block = block = ffi.new('lzma_block*')
             block.version = 0
+            block.check = check
             block.header_size = len(header)
             block.filters = self.__filters = ffi.new('lzma_filter[]', m.LZMA_FILTERS_MAX+1)
             header_b = ffi.new('char[]', to_bytes(header))

@@ -288,6 +288,7 @@ class _SeekableXZFile(io.BufferedIOBase):
         index = None
         filesize = fp.seek(0, SEEK_END)
 
+        self._check = []
         while fp.tell() > 0:
             # read one stream
             if fp.tell() < 2 * STREAM_HEADER_SIZE:
@@ -312,6 +313,7 @@ class _SeekableXZFile(io.BufferedIOBase):
             stream_flags2 = decode_stream_header(_peek(fp, STREAM_HEADER_SIZE))
             if not stream_flags.matches(stream_flags2):
                 raise LZMAError("header and footer don't match")
+            self._check.append(stream_flags.check)
             # TODO add to index
             
             if index is not None:
@@ -321,26 +323,30 @@ class _SeekableXZFile(io.BufferedIOBase):
             raise LZMAError("file is empty")
 
         self._index = index
-        self._buffer = None
         self._size = index.uncompressed_size
-        self._mode = _MODE_READ
-        self._init_decompressor(*index.find(0))
+        self._move_to_block(0)
 
     def _init_decompressor(self, stream_data, block_data):
+        self._mode = _MODE_READ
         self._pos = self._block_offset = block_data.uncompressed_file_offset
+        self._block_ends_at = block_data.uncompressed_file_offset + \
+                block_data.uncompressed_size
+        self._buffer = None
         self._fp.seek(block_data.compressed_file_offset, SEEK_SET)
         header_size = decode_block_header_size(_peek(self._fp, 1))
         header = self._fp.read(header_size)
-        import pdb; pdb.set_trace()
         self._decompressor = LZMADecompressor(format=FORMAT_BLOCK, header=header,
-            unpadded_size=block_data.unpadded_size)
+                check=self._check[stream_data.number-1],
+                unpadded_size=block_data.unpadded_size)
 
-    def _next_block(self):
-        next_block_details = self._index.find(self._pos)
+    def _move_to_block(self, offset):
+        # find and load the block that has the byte at 'offset'.
+        next_block_details = self._index.find(offset)
         if next_block_details is None:
             return False
         else:
             self._init_decompressor(*next_block_details)
+            return True
 
     def peek(self, size=-1):
         """Return buffered data without advancing the file position.
@@ -401,7 +407,6 @@ class _SeekableXZFile(io.BufferedIOBase):
     def _fill_buffer(self):
         # Depending on the input data, our call to the decompressor may not
         # return any data. In this case, try again after reading another block.
-        import pdb; pdb.set_trace()
         while True:
             if self._buffer:
                 return True
@@ -413,16 +418,19 @@ class _SeekableXZFile(io.BufferedIOBase):
 
             if not rawblock:
                 if self._decompressor.eof:
-                    if not self._next_block():
-                        self._mode = _MODE_READ_EOF
-                        return False
+                    self._mode = _MODE_READ_EOF
+                    return False
                 else:
                     raise EOFError("Compressed file ended before the "
                                    "end-of-stream marker was reached")
 
-            # Continue to next stream.
+            # Continue to next block or stream.
             if self._decompressor.eof:
-                self._decompressor = LZMADecompressor(**self._init_args)
+                if self._move_to_block(self._pos):
+                    continue
+                else:
+                    self._mode = _MODE_READ_EOF
+                    return False
 
             self._buffer = self._decompressor.decompress(rawblock)
 
@@ -471,7 +479,10 @@ class _SeekableXZFile(io.BufferedIOBase):
         Note that seeking is emulated, sp depending on the parameters,
         this operation may be extremely slow.
         """
-        self._check_can_seek()
+        if offset is None:
+            #This is not needed on Python 3 where the comparison to self._pos
+            #will fail with a TypeError.
+            raise TypeError("Seek offset should be an integer, not None")
 
         # Recalculate offset as an absolute file position.
         if whence == 0:
@@ -483,15 +494,13 @@ class _SeekableXZFile(io.BufferedIOBase):
         else:
             raise ValueError("Invalid value for whence: {}".format(whence))
 
+        if not self._pos <= offset < self._block_ends_at:
+            # switch blocks or load the block from its first byte.
+            # this changes self._pos.
+            self._move_to_block(offset)
+
         # Make it so that offset is the number of bytes to skip forward.
-        if offset is None:
-            #This is not needed on Python 3 where the comparison to self._pos
-            #will fail with a TypeError.
-            raise TypeError("Seek offset should be an integer, not None")
-        if offset < self._pos:
-            self._rewind()
-        else:
-            offset -= self._pos
+        offset -= self._pos
 
         # Read and discard data until we reach the desired position.
         if self._mode != _MODE_READ_EOF:

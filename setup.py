@@ -13,7 +13,7 @@ from distutils.command.build_ext import build_ext
 from distutils.core import setup
 from distutils.extension import Extension
 
-# We now extract the version number in backports/lzma/__init__.py
+# We now extract the version number in lzmaffi/__init__.py
 # We can't use "from backports import lzma" then "lzma.__version__"
 # as that would tell us the version already installed (if any).
 __version__ = None
@@ -23,7 +23,7 @@ with open('lzmaffi/__init__.py') as handle:
             exec(line.strip())
             break
 if __version__ is None:
-    sys.stderr.write("Error getting __version__ from backports/lzma/__init__.py\n")
+    sys.stderr.write("Error getting __version__ from lzmaffi/__init__.py\n")
     sys.exit(1)
 print("This is lzmaffi version %s" % __version__)
 
@@ -59,6 +59,7 @@ setup(
     name = "lzmaffi",
     version = __version__,
     description = descr,
+    ext_package='lzmaffi',
     author = "Tomer Chachamu, based on work by Peter Cock",
     author_email = "tomer.chachamu@gmail.com",
     url = "https://github.com/r3m0t/backports.lzma",

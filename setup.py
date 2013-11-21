@@ -29,7 +29,8 @@ print("This is lzmaffi version %s" % __version__)
 
 import lzmaffi._lzmamodule2 as ffimod
 
-packages = ["lzmaffi"]
+packages = ["lzmaffi",
+		"_lzmaffi_mods"] # workaround for https://bitbucket.org/cffi/cffi/issue/109/enable-sane-packaging-for-cffi
 extens = [ffimod.ffi.verifier.get_extension()]
 
 descr = "Port of Python 3.3's 'lzma' module for XZ/LZMA compressed files to cffi."
@@ -59,7 +60,7 @@ setup(
     name = "lzmaffi",
     version = __version__,
     description = descr,
-    ext_package='lzmaffi',
+    ext_package='_lzmaffi_mods',
     author = "Tomer Chachamu, based on work by Peter Cock",
     author_email = "tomer.chachamu@gmail.com",
     url = "https://github.com/r3m0t/backports.lzma",

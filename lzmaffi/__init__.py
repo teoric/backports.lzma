@@ -25,11 +25,11 @@ __all__ = [
 ]
 
 import io
-from io import SEEK_SET, SEEK_CUR, SEEK_END
 from io import DEFAULT_BUFFER_SIZE as _BUFFER_SIZE
 from ._lzmamodule2 import *
 from ._lzmamodule2 import _encode_filter_properties, _decode_filter_properties
 
+SEEK_SET, SEEK_CUR, SEEK_END = 0, 1, 2
 
 _MODE_CLOSED   = 0
 _MODE_READ     = 1

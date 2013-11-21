@@ -37,7 +37,7 @@ _MODE_READ_EOF = 2
 _MODE_WRITE    = 3
 
 
-__version__ = "0.0.4"
+__version__ = "0.0.5"
 
 class _LZMAFile(io.BufferedIOBase):
     """A file object providing transparent LZMA (de)compression.

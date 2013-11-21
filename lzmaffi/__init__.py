@@ -128,6 +128,11 @@ class _LZMAFile(io.BufferedIOBase):
         self._check_not_closed()
         return self._mode == _MODE_WRITE
 
+    def seekable(self):
+        """Return whether the file can be seeked."""
+        self._check_not_closed()
+        return False
+
     # Mode-checking helper functions.
 
     def _check_not_closed(self):
@@ -275,9 +280,9 @@ class _LZMAFile(io.BufferedIOBase):
 
 def _peek(fp, n):
     ret = fp.read(n)
+    fp.seek(-len(ret), SEEK_CUR)
     if len(ret) != n:
-        raise LZMAError("file too small")
-    fp.seek(-n, SEEK_CUR)
+        return False
     return ret
 
 class _SeekableXZFile(io.BufferedIOBase):
@@ -485,6 +490,8 @@ class _SeekableXZFile(io.BufferedIOBase):
             #will fail with a TypeError.
             raise TypeError("Seek offset should be an integer, not None")
 
+        self._check_not_closed()
+
         # Recalculate offset as an absolute file position.
         if whence == 0:
             pass
@@ -494,6 +501,8 @@ class _SeekableXZFile(io.BufferedIOBase):
             offset = self._size + offset
         else:
             raise ValueError("Invalid value for whence: {}".format(whence))
+
+        offset = max(offset, 0)
 
         if not self._pos <= offset < self._block_ends_at:
             # switch blocks or load the block from its first byte.
@@ -512,6 +521,11 @@ class _SeekableXZFile(io.BufferedIOBase):
     def tell(self):
         self._check_not_closed()
         return self._pos
+
+    def fileno(self):
+        """Return the file descriptor for the underlying file."""
+        self._check_not_closed()
+        return self._fp.fileno()
 
     @property
     def closed(self):
@@ -538,6 +552,10 @@ class _SeekableXZFile(io.BufferedIOBase):
             self._fp = None
             self._closefp = False
             self._mode = _MODE_CLOSED
+
+    def writable(self):
+        self._check_not_closed()
+        return False
 
     def readable(self):
         self._check_not_closed()
@@ -611,7 +629,13 @@ def LZMAFile(filename, mode="r",
     if fp.seekable() and seek and 'r' in mode:
         if format is None:
             format = FORMAT_AUTO
-        if format == FORMAT_XZ or (format == FORMAT_AUTO and _detect_xz(fp)):
+        if format == FORMAT_XZ or (format == FORMAT_AUTO and _detect_xz(fp)) and mode in ('r', 'rb'):
+            if check != -1:
+                raise ValueError("Cannot specify an integrity check "
+                                 "when opening a file for reading")
+            if preset is not None:
+                raise ValueError("Cannot specify a preset compression "
+                                 "level when opening a file for reading")
             return _SeekableXZFile(fp, close_fp=close_fp)
 
     return _LZMAFile(fp, mode=mode, format=format, check=check, close_fp=close_fp,

@@ -343,6 +343,8 @@ class _SeekableXZFile(io.BufferedIOBase):
         # find and load the block that has the byte at 'offset'.
         next_block_details = self._index.find(offset)
         if next_block_details is None:
+            self._pos = self._size
+            self._mode = _MODE_READ_EOF
             return False
         else:
             self._init_decompressor(*next_block_details)
@@ -429,7 +431,6 @@ class _SeekableXZFile(io.BufferedIOBase):
                 if self._move_to_block(self._pos):
                     continue
                 else:
-                    self._mode = _MODE_READ_EOF
                     return False
 
             self._buffer = self._decompressor.decompress(rawblock)

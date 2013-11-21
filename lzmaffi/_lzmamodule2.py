@@ -298,7 +298,7 @@ void _pylzma_allocator_init2(lzma_allocator *al, void *my_own_alloc (void*,size_
     al->alloc = my_own_alloc;
     al->free = my_own_free;
 }
-""", libraries=[':liblzma.so.5'], ext_package='_lzmaffi_mods')
+""", libraries=[':liblzma.so.5'], ext_package='_lzmaffi_mods', modulename='_compiled_module')
 
 def _new_lzma_stream():
     ret = ffi.new('lzma_stream*')

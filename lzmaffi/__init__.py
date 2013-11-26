@@ -37,7 +37,7 @@ _MODE_READ_EOF = 2
 _MODE_WRITE    = 3
 
 
-__version__ = "0.0.8"
+__version__ = "0.0.9"
 
 class _LZMAFile(io.BufferedIOBase):
     """A file object providing transparent LZMA (de)compression.
@@ -293,7 +293,7 @@ class _SeekableXZFile(io.BufferedIOBase):
         index = None
         filesize = fp.seek(0, SEEK_END)
 
-        self._check = []
+        checks = []
         while fp.tell() > 0:
             # read one stream
             if fp.tell() < 2 * STREAM_HEADER_SIZE:
@@ -318,8 +318,7 @@ class _SeekableXZFile(io.BufferedIOBase):
             stream_flags2 = decode_stream_header(_peek(fp, STREAM_HEADER_SIZE))
             if not stream_flags.matches(stream_flags2):
                 raise LZMAError("header and footer don't match")
-            self._check.append(stream_flags.check)
-            # TODO add to index
+            checks.append(stream_flags.check)
             
             if index is not None:
                 new_index.append(index)
@@ -327,6 +326,8 @@ class _SeekableXZFile(io.BufferedIOBase):
         if index is None:
             raise LZMAError("file is empty")
 
+        checks.reverse()
+        self._check = checks
         self._index = index
         self._size = index.uncompressed_size
         self._move_to_block(0)

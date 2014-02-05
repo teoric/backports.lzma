@@ -37,7 +37,7 @@ _MODE_READ_EOF = 2
 _MODE_WRITE    = 3
 
 
-__version__ = "0.0.9"
+__version__ = "0.1.0"
 
 class _LZMAFile(io.BufferedIOBase):
     """A file object providing transparent LZMA (de)compression.
@@ -331,6 +331,8 @@ class _SeekableXZFile(io.BufferedIOBase):
         self._index = index
         self._size = index.uncompressed_size
         self._move_to_block(0)
+
+    block_boundaries = property(lambda self: [block.uncompressed_file_offset for _i, block in self._index])
 
     def _init_decompressor(self, stream_data, block_data):
         self._mode = _MODE_READ

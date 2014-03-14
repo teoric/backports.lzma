@@ -8,10 +8,9 @@
 import sys, os
 from warnings import warn
 
-from distutils import log
-from distutils.command.build_ext import build_ext
-from distutils.core import setup
-from distutils.extension import Extension
+from setuptools import setup
+from setuptools.command.build_ext import build_ext
+from setuptools.extension import Extension
 
 # We now extract the version number in lzmaffi/__init__.py
 # We can't use "from backports import lzma" then "lzma.__version__"
@@ -67,6 +66,7 @@ setup(
     license='3-clause BSD License',
     keywords = "xy lzma compression decompression cffi ffi",
     long_description = long_descr,
+    install_requires=['cffi'],
     classifiers = [
         'Development Status :: 5 - Production/Stable',
         'Programming Language :: Python',

@@ -270,9 +270,6 @@ int lzma_lzma_preset(lzma_options_lzma* options, uint32_t preset);
 void _pylzma_stream_init(lzma_stream *strm);
 void _pylzma_block_header_size_decode(uint32_t b);
 
-// TODO remove
-void _pylzma_allocator_init2(lzma_allocator *al, void *my_own_alloc (void*, size_t, size_t), void my_own_free (void*, void*));
-
 void free(void* ptr);
 """)
 
@@ -285,18 +282,6 @@ void _pylzma_stream_init(lzma_stream *strm) {
 
 uint32_t _pylzma_block_header_size_decode(uint32_t b) {
     return lzma_block_header_size_decode(b); // macro from lzma.h
-}
-
-void* my_alloc(void* opaque, size_t nmemb, size_t size) { return PyMem_Malloc(size); }
-void my_free(void* opaque, void *ptr) { PyMem_Free(ptr); }
-
-void _pylzma_allocator_init(lzma_allocator *al) {
-    al->alloc = *my_alloc;
-    al->free = *my_free;
-}
-void _pylzma_allocator_init2(lzma_allocator *al, void *my_own_alloc (void*,size_t,size_t), void my_own_free (void*,void*)) {
-    al->alloc = my_own_alloc;
-    al->free = my_own_free;
 }
 """, libraries=[':liblzma.so.5'], ext_package='_lzmaffi_mods', modulename='_compiled_module')
 
@@ -628,7 +613,6 @@ class Allocator(object):
         self.lzma_allocator.alloc = alloc
         self.lzma_allocator.free = free
         self.lzma_allocator.opaque = ffi.NULL
-        #m._pylzma_allocator_init2(self.lzma_allocator, alloc, free)
     def __alloc(self, _opaque, _nmemb, size):
         new_mem = ffi.new('char[]', size)
         self.owns[self._addr(new_mem)] = new_mem
@@ -687,8 +671,6 @@ class LZMADecompressor(object):
         self.unused_data = b''
         self.eof = False
         self.lzs = _new_lzma_stream()
-        self.allocator = Allocator()
-        #self.lzs.allocator = self.allocator.lzma_allocator
 
         if format == FORMAT_AUTO:
             catch_lzma_error(m.lzma_auto_decoder, self.lzs, memlimit, decoder_flags)
@@ -814,8 +796,6 @@ class LZMACompressor(object):
         self.lock = threading.Lock()
         self.flushed = 0
         self.lzs = _new_lzma_stream()
-        self.allocator = Allocator()
-        #self.lzs.allocator = self.allocator.lzma_allocator
         if format == FORMAT_XZ:
             if filters is None:
                 if check == -1:

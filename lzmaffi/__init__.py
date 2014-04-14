@@ -37,7 +37,7 @@ _MODE_READ_EOF = 2
 _MODE_WRITE    = 3
 
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 
 class _LZMAFile(io.BufferedIOBase):
     """A file object providing transparent LZMA (de)compression.
@@ -629,7 +629,7 @@ def LZMAFile(filename, mode="r",
     else:
         raise TypeError("filename must be a str or bytes object, or a file")
 
-    if fp.seekable() and seek and 'r' in mode:
+    if 'r' in mode and seek and fp.seekable():
         if format is None:
             format = FORMAT_AUTO
         if format == FORMAT_XZ or (format == FORMAT_AUTO and _detect_xz(fp)) and mode in ('r', 'rb'):

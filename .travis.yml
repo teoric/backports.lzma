@@ -4,12 +4,11 @@ python:
   - "2.7"
   - "3.2"
   - "3.3"
-  - "3.4"
+  - "pypy"
 before_install:
   - sudo apt-get install liblzma-dev
 install:
-  - "pip install cffi"
-  - "pip install test"
+  - "pip install -r requirements.txt"
   - "python setup.py install"
 before_script:
   - "cd test"

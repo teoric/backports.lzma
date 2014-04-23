@@ -52,7 +52,10 @@ In order to compile this, you will need to install XZ Utils from http://tukaani.
 """
 
 if sys.version_info < (2,6):
-    sys.stderr.write("ERROR: Python 2.5 and older are not supported, and probably never will be.\n")
+    sys.stderr.write("ERROR: Python 2.5 and older are not supported, and never will be.\n")
+    sys.exit(1)
+if sys.version_info < (2,7):
+    sys.stderr.write("ERROR: Python 2.6 is only compatible in versions under 0.2.0.\n")
     sys.exit(1)
 
 setup(
@@ -70,7 +73,6 @@ setup(
     classifiers = [
         'Development Status :: 5 - Production/Stable',
         'Programming Language :: Python',
-        'Programming Language :: Python :: 2.6',
         'Programming Language :: Python :: 2.7',
         'Programming Language :: Python :: 3',
         'Topic :: Software Development :: Libraries :: Python Modules',

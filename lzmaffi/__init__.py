@@ -36,8 +36,10 @@ _MODE_READ     = 1
 _MODE_READ_EOF = 2
 _MODE_WRITE    = 3
 
+__version__ = "0.2.0"
 
-__version__ = "0.1.2"
+def memoryview_tobytes(buffer):
+    return buffer.tobytes() if isinstance(buffer, memoryview) else buffer
 
 class _LZMAFile(io.BufferedIOBase):
     """A file object providing transparent LZMA (de)compression.
@@ -173,48 +175,11 @@ class _LZMAFile(io.BufferedIOBase):
             if self._decompressor.eof:
                 self._decompressor = LZMADecompressor(**self._init_args)
 
+            # running memoryview here would often copy the bytes because
+            # memoryview(b'data').tobytes() copies the bytes.
+            # instead, self._buffer is made into a memoryview whenever it's a
+            # bytes object that gets sliced.
             self._buffer = self._decompressor.decompress(rawblock)
-
-    # Read data until EOF.
-    # If return_data is false, consume the data without returning it.
-    def _read_all(self, return_data=True):
-        blocks = []
-        while self._fill_buffer():
-            if return_data:
-                blocks.append(self._buffer)
-            self._pos += len(self._buffer)
-            self._buffer = None
-        if return_data:
-            return b"".join(blocks)
-
-    # Read a block of up to n bytes.
-    # If return_data is false, consume the data without returning it.
-    def _read_block(self, n, return_data=True):
-        blocks = []
-        while n > 0 and self._fill_buffer():
-            if n < len(self._buffer):
-                data = self._buffer[:n]
-                self._buffer = self._buffer[n:]
-            else:
-                data = self._buffer
-                self._buffer = None
-            if return_data:
-                blocks.append(data)
-            self._pos += len(data)
-            n -= len(data)
-        if return_data:
-            return b"".join(blocks)
-
-    def peek(self, size=-1):
-        """Return buffered data without advancing the file position.
-
-        Always returns at least one byte of data, unless at EOF.
-        The exact number of bytes returned is unspecified.
-        """
-        self._check_can_read()
-        if self._mode == _MODE_READ_EOF or not self._fill_buffer():
-            return b""
-        return self._buffer
 
     def read(self, size=-1):
         """Read up to size uncompressed bytes from the file.
@@ -234,6 +199,47 @@ class _LZMAFile(io.BufferedIOBase):
         else:
             return self._read_block(size)
 
+    # Read data until EOF.
+    # If return_data is false, consume the data without returning it.
+    def _read_all(self, return_data=True):
+        blocks = []
+        while self._fill_buffer():
+            if return_data:
+                blocks.append(memoryview_tobytes(self._buffer))
+            self._pos += len(self._buffer)
+            self._buffer = None
+        if return_data:
+            return b"".join(blocks)
+
+    # Read a block of up to n bytes.
+    # If return_data is false, consume the data without returning it.
+    def _read_block(self, n, return_data=True):
+        blocks = []
+        while n > 0 and self._fill_buffer():
+            if n < len(self._buffer):
+                data = memoryview_tobytes(self._buffer[:n])
+                self._buffer = memoryview(self._buffer)[n:]
+            else:
+                data = memoryview_tobytes(self._buffer)
+                self._buffer = None
+            if return_data:
+                blocks.append(data)
+            self._pos += len(data)
+            n -= len(data)
+        if return_data:
+            return b"".join(blocks)
+
+    def peek(self, size=-1):
+        """Return buffered data without advancing the file position.
+
+        Always returns at least one byte of data, unless at EOF.
+        The exact number of bytes returned is unspecified.
+        """
+        self._check_can_read()
+        if self._mode == _MODE_READ_EOF or not self._fill_buffer():
+            return b""
+        return memoryview_tobytes(self._buffer)
+
     def read1(self, size=-1):
         """Read up to size uncompressed bytes, while trying to avoid
         making multiple reads from the underlying stream.
@@ -252,10 +258,10 @@ class _LZMAFile(io.BufferedIOBase):
             not self._fill_buffer()):
             return b""
         if 0 < size < len(self._buffer):
-            data = self._buffer[:size]
-            self._buffer = self._buffer[size:]
+            data = memoryview_tobytes(self._buffer[:size])
+            self._buffer = memoryview(self._buffer)[size:]
         else:
-            data = self._buffer
+            data = memoryview_tobytes(self._buffer)
             self._buffer = None
         self._pos += len(data)
         return data
@@ -358,17 +364,6 @@ class _SeekableXZFile(io.BufferedIOBase):
             self._init_decompressor(*next_block_details)
             return True
 
-    def peek(self, size=-1):
-        """Return buffered data without advancing the file position.
-
-        Always returns at least one byte of data, unless at EOF.
-        The exact number of bytes returned is unspecified.
-        """
-        self._check_not_closed()
-        if self._mode == _MODE_READ_EOF or not self._fill_buffer():
-            return b""
-        return self._buffer
-
     def read(self, size=-1):
         """Read up to size uncompressed bytes from the file.
 
@@ -386,6 +381,47 @@ class _SeekableXZFile(io.BufferedIOBase):
             return self._read_all()
         else:
             return self._read_block(size)
+
+    # Read data until EOF.
+    # If return_data is false, consume the data without returning it.
+    def _read_all(self, return_data=True):
+        blocks = []
+        while self._fill_buffer():
+            if return_data:
+                blocks.append(memoryview_tobytes(self._buffer))
+            self._pos += len(self._buffer)
+            self._buffer = None
+        if return_data:
+            return b"".join(blocks)
+
+    # Read a block of up to n bytes.
+    # If return_data is false, consume the data without returning it.
+    def _read_block(self, n, return_data=True):
+        blocks = []
+        while n > 0 and self._fill_buffer():
+            if n < len(self._buffer):
+                data = memoryview_tobytes(self._buffer[:n])
+                self._buffer = memoryview(self._buffer)[n:]
+            else:
+                data = memoryview_tobytes(self._buffer)
+                self._buffer = None
+            if return_data:
+                blocks.append(data)
+            self._pos += len(data)
+            n -= len(data)
+        if return_data:
+            return b"".join(blocks)
+
+    def peek(self, size=-1):
+        """Return buffered data without advancing the file position.
+
+        Always returns at least one byte of data, unless at EOF.
+        The exact number of bytes returned is unspecified.
+        """
+        self._check_not_closed()
+        if self._mode == _MODE_READ_EOF or not self._fill_buffer():
+            return b""
+        return memoryview_tobytes(self._buffer)
 
     def read1(self, size=-1):
         """Read up to size uncompressed bytes, while trying to avoid
@@ -405,10 +441,10 @@ class _SeekableXZFile(io.BufferedIOBase):
             not self._fill_buffer()):
             return b""
         if 0 < size < len(self._buffer):
-            data = self._buffer[:size]
-            self._buffer = self._buffer[size:]
+            data = memoryview_tobytes(self._buffer[:size])
+            self._buffer = memoryview(self._buffer)[size:]
         else:
-            data = self._buffer
+            data = memoryview_tobytes(self._buffer)
             self._buffer = None
         self._pos += len(data)
         return data
@@ -442,36 +478,6 @@ class _SeekableXZFile(io.BufferedIOBase):
                     return False
 
             self._buffer = self._decompressor.decompress(rawblock)
-
-    # Read data until EOF.
-    # If return_data is false, consume the data without returning it.
-    def _read_all(self, return_data=True):
-        blocks = []
-        while self._fill_buffer():
-            if return_data:
-                blocks.append(self._buffer)
-            self._pos += len(self._buffer)
-            self._buffer = None
-        if return_data:
-            return b"".join(blocks)
-
-    # Read a block of up to n bytes.
-    # If return_data is false, consume the data without returning it.
-    def _read_block(self, n, return_data=True):
-        blocks = []
-        while n > 0 and self._fill_buffer():
-            if n < len(self._buffer):
-                data = self._buffer[:n]
-                self._buffer = self._buffer[n:]
-            else:
-                data = self._buffer
-                self._buffer = None
-            if return_data:
-                blocks.append(data)
-            self._pos += len(data)
-            n -= len(data)
-        if return_data:
-            return b"".join(blocks)
 
     def seek(self, offset, whence=0):
         """Change the file position.
@@ -650,7 +656,7 @@ def _detect_xz(fp):
 
 def open(filename, mode="rb",
          format=None, check=-1, preset=None, filters=None,
-         encoding=None, errors=None, newline=None):
+         encoding=None, errors=None, newline=None, seek=True):
     """Open an LZMA-compressed file in binary or text mode.
 
     filename can be either an actual file name (given as a str or bytes object),
@@ -685,7 +691,7 @@ def open(filename, mode="rb",
 
     lz_mode = mode.replace("t", "")
     binary_file = LZMAFile(filename, lz_mode, format=format, check=check,
-                           preset=preset, filters=filters)
+                           preset=preset, filters=filters, seek=seek)
 
     if "t" in mode:
         return io.TextIOWrapper(binary_file, encoding, errors, newline)

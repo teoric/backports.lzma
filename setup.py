@@ -26,11 +26,15 @@ if __version__ is None:
     sys.exit(1)
 print("This is lzmaffi version %s" % __version__)
 
-import lzmaffi._lzmamodule2 as ffimod
+if 'egg_info' not in sys.argv:
+	import lzmaffi._lzmamodule2 as ffimod
 
-packages = ["lzmaffi",
-		"_lzmaffi_mods"] # workaround for https://bitbucket.org/cffi/cffi/issue/109/enable-sane-packaging-for-cffi
-extens = [ffimod.ffi.verifier.get_extension()]
+	packages = ["lzmaffi",
+			"_lzmaffi_mods"] # workaround for https://bitbucket.org/cffi/cffi/issue/109/enable-sane-packaging-for-cffi
+	extens = [ffimod.ffi.verifier.get_extension()]
+else:
+	packages = ["lzmaffi", "_lzmaffi_mods"]
+	extens = []
 
 descr = "Port of Python 3.3's 'lzma' module for XZ/LZMA compressed files to cffi."
 long_descr = """This is a port of the 'lzma' module included in Python 3.3 or later
@@ -69,7 +73,7 @@ setup(
     license='3-clause BSD License',
     keywords = "xy lzma compression decompression cffi ffi",
     long_description = long_descr,
-    install_requires=['cffi'],
+    install_requires=['cffi>=0.6'],
     classifiers = [
         'Development Status :: 5 - Production/Stable',
         'Programming Language :: Python',

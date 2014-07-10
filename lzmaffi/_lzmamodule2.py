@@ -283,7 +283,7 @@ void _pylzma_stream_init(lzma_stream *strm) {
 uint32_t _pylzma_block_header_size_decode(uint32_t b) {
     return lzma_block_header_size_decode(b); // macro from lzma.h
 }
-""", libraries=[':liblzma.so.5'], ext_package='_lzmaffi_mods', modulename='_compiled_module')
+""", libraries=['lzma'], ext_package='_lzmaffi_mods', modulename='_compiled_module')
 
 def _new_lzma_stream():
     ret = ffi.new('lzma_stream*')
